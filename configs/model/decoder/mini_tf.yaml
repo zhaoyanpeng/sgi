@@ -1,0 +1,23 @@
+name: MiniTFDecHead
+w2v_file: ${data.data_root}/${data.enc_w2v_name}
+w_dim: 512 # word
+m_dim: 512 # model
+f_dim: 1024 # forward
+p_dim: 512 # position
+num_p: 64 
+p_type: learned 
+num_layer: 4
+p_dropout: 0.0 # position dropout
+t_dropout: 0.0 # transformer dropout
+attn_dropout: 0.0 # 
+proj_dropout: ${.t_dropout}
+attn_cls_intra: MiniTFAttention
+attn_cls_inter: MiniTFAttention
+num_head: 8
+num_head_intra: null
+num_head_inter: null
+qk_scale: null
+activation: gelu
+skip_embed: False
+ln_input: True 
+max_dec_len: 30  

@@ -1,0 +1,1 @@
+from .decoder_head import build_decoder_head, DECODER_HEADS_REGISTRY

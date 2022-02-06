@@ -1,0 +1,8 @@
+name: 'LMLossHead'
+layers: []
+scaling: True
+max_len_dec: 20
+
+add_dummy: ${data.add_dummy}
+cate_type: ${data.cate_type} 
+optim_only_relation: True

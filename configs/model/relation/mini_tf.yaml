@@ -1,0 +1,29 @@
+name: RelationDistiller 
+w2v_file: ${data.data_root}/${data.enc_w2v_name}
+w_dim: ${..encoder.w_dim} # word
+cat_w: ${..encoder.cat_w} # concatenate or average word vectors
+num_w: ${..encoder.num_w}
+w_onehot: False
+m_dim: 512 # model
+f_dim: 1024 # forward
+p_dim: 512 # position
+num_p: 4 
+cat_p: False
+p_type: learned 
+num_layer: 4
+p_dropout: 0.0 # position dropout
+t_dropout: 0.0 # transformer dropout
+attn_dropout: 0.0 # 
+proj_dropout: ${.t_dropout}
+attn_cls_intra: MiniTFAttention
+attn_cls_inter: null
+num_head: 8
+num_head_intra: null
+num_head_inter: null
+qk_scale: null
+activation: gelu
+skip_embed: True 
+ln_input: True 
+num_relation: 32
+tie_head_rel: False
+use_only_pos: False
