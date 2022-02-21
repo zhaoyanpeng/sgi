@@ -20,9 +20,8 @@ class SGI(nn.Module):
 
     def forward(
         self, 
-        obj_idxes, obj_boxes, obj_names, 
-        obj_masks, sequences, img_shape,
-        *args, **kwargs
+        obj_idxes, obj_boxes, obj_names, obj_masks, sequences, img_shape,
+        *args, file_name=None, obj_names_int=None, analyze=False, **kwargs
     ):
         device_ids = kwargs.get("device_ids", [0])
         relations = self.relation_head(
@@ -30,14 +29,23 @@ class SGI(nn.Module):
         )
         if isinstance(relations, dict):
             kwargs.update(relations)
-        objects, rels = self.encoder_head(
+        objects, rels, enc_extra = self.encoder_head(
             obj_names, *img_shape, bbox=obj_boxes, self_key_padding_mask=obj_masks, **kwargs
         ) 
-        logits, targets = self.decoder_head(
+        logits, targets, dec_extra = self.decoder_head(
             sequences, memory=objects, memo_key_padding_mask=obj_masks
         )
         loss, outs = self.loss_head(logits, targets)
+        if analyze:
+            self.analyze(
+                obj_names=obj_names_int, obj_masks=obj_masks, sequences=sequences,
+                obj_boxes=obj_boxes, file_name=file_name, enc_extra=enc_extra, dec_extra=dec_extra,
+            )
         return loss, (rels, outs) 
+
+    def analyze(self, **kwargs):
+        self.last_batch = {k: v for k, v in kwargs.items()}
+        return None
 
     def collect_state_dict(self):
         return (

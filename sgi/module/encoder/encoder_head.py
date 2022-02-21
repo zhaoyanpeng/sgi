@@ -183,7 +183,7 @@ class MiniTFEncHead(MetaEncHead):
             x, self_key_padding_mask=self_key_padding_mask, **kwargs,
         ) 
 
-        return x, None 
+        return x, None, None
 
 @ENCODER_HEADS_REGISTRY.register()
 class TorchTFEncHead(MetaEncHead):
@@ -218,7 +218,7 @@ class TorchTFEncHead(MetaEncHead):
 
         x = x.transpose(0, 1)
 
-        return x, None 
+        return x, None, None
 
 @ENCODER_HEADS_REGISTRY.register()
 class RelationDistiller(MiniTFEncHead):

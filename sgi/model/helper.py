@@ -11,8 +11,8 @@ def load_checkpoint(cfg, echo):
         checkpoint = torch.load(model_file, map_location="cpu")
         echo(f"Loading from {model_file}")
     except Exception as e:
-        echo(f"Failed to load the checkpoint `{model_file}`")
-        return (None,) * 2 
+        echo(f"Failed to load the checkpoint `{model_file}` {e}")
+        return (None,) * 6
     local_cfg = checkpoint["cfg"]
     local_str = OmegaConf.to_yaml(local_cfg)
     if cfg.verbose:

@@ -28,7 +28,7 @@ class Monitor(object):
         if not self.model.training:
             self.echo("Evaluating started...")
             with torch.no_grad():
-                report = self.evaluate(self.evalfile, samples=self.cfg.data.eval_samples)
+                report = self.evaluate(self.dataloader, samples=self.cfg.data.eval_samples)
                 self.echo(f"{report}")
                 return None 
         self.echo("Training started...")
@@ -133,7 +133,9 @@ class Monitor(object):
                 self.model.train(True)
             if report != "":
                 self.echo(f"{report}")
-            if self.cfg.rank == 0 and not self.cfg.running.skip_save:
+            if (self.cfg.rank == 0 and not self.cfg.running.skip_save) or (
+                    self.cfg.running.save_last and self.cfg.running.epochs == iepoch + 1
+                ):
                 self.save()
 
         # global across epochs 

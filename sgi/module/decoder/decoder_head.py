@@ -120,16 +120,17 @@ class MiniTFDecHead(MetaDecHead):
         
         x = self._encode_positions(i_seqs)
         
-        x, _ = self.encoder(
+        x, attn_weights = self.encoder(
             x, 
             memory=memory, 
             self_attn_mask=self_attn_mask.squeeze(0),
             self_key_padding_mask=self_key_padding_mask,
             memo_key_padding_mask=memo_key_padding_mask,
+            require_attn_weight=True
         ) 
 
         x = self.predictor(x) 
-        return x, o_seqs.contiguous() 
+        return x, o_seqs.contiguous(), attn_weights
 
     def inference(
         self, 
@@ -169,7 +170,7 @@ class MiniTFDecHead(MetaDecHead):
             all_ctx = torch.cat((all_ctx, new_ctx), 1)
 
         all_logits = torch.cat(logits, dim=1)
-        return all_logits, o_seqs
+        return all_logits, o_seqs, None
 
 @DECODER_HEADS_REGISTRY.register()
 class TorchTFDecHead(MetaDecHead):
@@ -230,4 +231,4 @@ class TorchTFDecHead(MetaDecHead):
         x = x.transpose(0, 1)
 
         x = self.predictor(x) 
-        return x, o_seqs.contiguous() 
+        return x, o_seqs.contiguous(), None
