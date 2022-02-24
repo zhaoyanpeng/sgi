@@ -18,12 +18,12 @@ Registry for encoder heads.
 
 initializr = lambda x: None 
 
-def build_encoder_head(cfg, vocab):
-    return ENCODER_HEADS_REGISTRY.get(cfg.name)(cfg, vocab)
+def build_encoder_head(cfg, vocab, **kwargs):
+    return ENCODER_HEADS_REGISTRY.get(cfg.name)(cfg, vocab, **kwargs)
 
 @ENCODER_HEADS_REGISTRY.register()
 class DummyEncHead(nn.Module):
-    def __init__(self, cfg, token_vocab):
+    def __init__(self, cfg, token_vocab, **kwargs):
         super().__init__()
         pass
     def _reset_parameters(self):
@@ -40,6 +40,7 @@ class MetaEncHead(nn.Module):
         super().__init__()
         # input embedding layer
         wdim = cfg.w_dim
+        self.token_embed = None
         self.token_vocab = token_vocab
         if os.path.isfile(cfg.w2v_file):
             self.token_embed = PartiallyFixedEmbedding(self.token_vocab, cfg.w2v_file)
@@ -83,8 +84,18 @@ class MetaEncHead(nn.Module):
             self.fc0 = nn.Linear(self.input_channels, cfg.m_dim, bias=False) 
         self.ln0 = nn.LayerNorm(cfg.m_dim) if cfg.ln_input else nn.Identity()
         
+        self._output_size = self._emb_size = cfg.m_dim
+
         self.p_dim = p_dim
         self.cat_p = cat_p
+
+    @property
+    def emb_size(self):
+        return self._emb_size
+
+    @property
+    def output_size(self):
+        return self._output_size
 
     def _reset_parameters(self):
         for field in [self.fc0]:
@@ -150,7 +161,7 @@ class MetaEncHead(nn.Module):
 class MiniTFEncHead(MetaEncHead):
     """ Customized Transformer encoder.
     """
-    def __init__(self, cfg, token_vocab):
+    def __init__(self, cfg, token_vocab, **kwargs):
         super().__init__(cfg, token_vocab)
         layer_fn = lambda : MiniTFBlock(
             cfg.m_dim, cfg.num_head, cfg.f_dim, cfg.attn_cls_intra, 
@@ -189,7 +200,7 @@ class MiniTFEncHead(MetaEncHead):
 class TorchTFEncHead(MetaEncHead):
     """ Standard Transformer encoder.
     """
-    def __init__(self, cfg, token_vocab):
+    def __init__(self, cfg, token_vocab, **kwargs):
         super().__init__(cfg, token_vocab)
         layer_fn = TransformerEncoderLayer(
             cfg.m_dim, cfg.num_head, cfg.f_dim, cfg.t_dropout, activation=cfg.activation,
@@ -224,7 +235,7 @@ class TorchTFEncHead(MetaEncHead):
 class RelationDistiller(MiniTFEncHead):
     """ Relation Induction: distilling relations into multihead relations.
     """
-    def __init__(self, cfg, token_vocab):
+    def __init__(self, cfg, token_vocab, **kwargs):
         super().__init__(cfg, token_vocab)
         # FAST tri-linear layer for relation distribution prediction
         self.proj_fc0 = nn.Linear(cfg.m_dim, cfg.num_relation, bias=False)

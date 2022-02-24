@@ -26,6 +26,7 @@ class MetaDecHead(nn.Module):
         super(MetaDecHead, self).__init__()
         # input embedding layer
         wdim = cfg.w_dim
+        self.token_embed = None
         self.token_vocab = token_vocab
         if os.path.isfile(cfg.w2v_file):
             self.token_embed = PartiallyFixedEmbedding(self.token_vocab, cfg.w2v_file)
@@ -48,6 +49,21 @@ class MetaDecHead(nn.Module):
             self.fc0 = nn.Linear(cfg.w_dim, cfg.m_dim, bias=False) 
         self.ln0 = nn.LayerNorm(cfg.m_dim) if cfg.ln_input else nn.Identity()
 
+        self._emb_size = cfg.m_dim
+
+    @property
+    def emb_size(self):
+        return self._emb_size
+
+    def init_state_from_memo(self, memo, **args):
+        pass
+
+    def detach_state(self):
+        pass
+
+    def init_state(self, encoder_final, **args):
+        pass
+
     def _reset_parameters(self):
         for field in [self.fc0]:
             if field is None: continue
@@ -57,7 +73,8 @@ class MetaDecHead(nn.Module):
                 nn.init.constant_(field.bias, 0.)
 
     def _encode_positions(self, x):
-        x = self.token_embed(x)
+        if self.token_embed is not None:
+            x = self.token_embed(x)
         if isinstance(self.position_embed, PositionalEncoder):
             x = self.position_embed(x)
         elif isinstance(self.position_embed, nn.Linear):
@@ -98,6 +115,7 @@ class MiniTFDecHead(MetaDecHead):
         memory: Tensor=None,
         memo_attn_mask: Tensor=None,
         memo_key_padding_mask: Tensor=None,
+        **kwargs,
     ):
         if memory is None: # may or may not have inter attention
             memory = memo_attn_mask = memo_key_padding_mask = None 
@@ -130,7 +148,7 @@ class MiniTFDecHead(MetaDecHead):
         ) 
 
         x = self.predictor(x) 
-        return x, o_seqs.contiguous(), attn_weights
+        return x, o_seqs.contiguous(), {"attns": attn_weights}
 
     def inference(
         self, 
@@ -138,6 +156,7 @@ class MiniTFDecHead(MetaDecHead):
         memory: Tensor = None,
         memo_attn_mask: Tensor = None,
         memo_key_padding_mask: Tensor = None,
+        **kwargs,
     ):
         # to generate sequences
         o_seqs = x[:, 1 :]
@@ -170,7 +189,7 @@ class MiniTFDecHead(MetaDecHead):
             all_ctx = torch.cat((all_ctx, new_ctx), 1)
 
         all_logits = torch.cat(logits, dim=1)
-        return all_logits, o_seqs, None
+        return all_logits, o_seqs, {}
 
 @DECODER_HEADS_REGISTRY.register()
 class TorchTFDecHead(MetaDecHead):
@@ -194,6 +213,7 @@ class TorchTFDecHead(MetaDecHead):
         memory: Tensor=None,
         memo_attn_mask: Tensor=None,
         memo_key_padding_mask: Tensor=None,
+        **kwargs,
     ):
         if memory is None: # may or may not have inter attention
             memory = memo_attn_mask = memo_key_padding_mask = None 
@@ -231,4 +251,4 @@ class TorchTFDecHead(MetaDecHead):
         x = x.transpose(0, 1)
 
         x = self.predictor(x) 
-        return x, o_seqs.contiguous(), None
+        return x, o_seqs.contiguous(), {}

@@ -2,6 +2,7 @@ name: 'LMLossHead'
 layers: []
 scaling: True
 max_len_dec: 20
+kl_warmup_steps: 0
 
 add_dummy: ${data.add_dummy}
 cate_type: ${data.cate_type} 

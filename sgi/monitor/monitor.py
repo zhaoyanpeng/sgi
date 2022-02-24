@@ -104,13 +104,13 @@ class Monitor(Monitor):
                 union, self.encoder_vocab, self.decoder_vocab, self.cate_vocab, self.device, 
                 max_num_obj=self.cfg.data.max_num_obj
             )
-        obj_names_int = obj_names
+        obj_names_src = obj_names
         file_name = union["file_name"]
         obj_names = self.model.backbone(obj_names, obj_name_lengths)
         return {
             "obj_idxes": obj_idxes, "obj_boxes": obj_boxes, "obj_names": obj_names, 
             "obj_masks": obj_masks, "sequences": sequences, "img_shape": img_shape,
-            "file_name": file_name, "obj_names_int": obj_names_int
+            "file_name": file_name, "obj_names_src": obj_names_src
         }
 
     def epoch(self, iepoch):
@@ -170,6 +170,7 @@ class Monitor(Monitor):
         return ppl_criteria 
 
     def infer(self, dataloader, samples=float("inf"), iepoch=0):
+        self.model.reset()
         losses, istep, nsample, nchunk, nbatch = 0, 0, 0, 1, len(dataloader)
         device_ids = [i for i in range(self.cfg.num_gpus)]
         if isinstance(self.model, DistributedDataParallel):
@@ -190,9 +191,9 @@ class Monitor(Monitor):
             batch_dict = self.make_batch(batch)
             sequences = batch_dict["sequences"]
 
-            _, (_, loss_out) = self.model(**batch_dict)
+            loss_mean, (_, loss_out) = self.model(**batch_dict)
             ntoken, loss_all = loss_out 
-            loss = loss_all.sum()
+            loss = loss_all.sum() if isinstance(loss_all, Tensor) else loss_mean * ntoken
 
             total_word += ntoken
             epoch_step += 1
@@ -218,9 +219,11 @@ class Monitor(Monitor):
         self.echo(f"# sample {nsample}; {nsample / (time.time() - start_time):.2f} samples/s")
         result = " ".join([f"{k}: {v[0] / v[1]:.2E}" for k, v in loss_per_length.items()])
         self.echo(f"Length-Loss - {result}")
+        self.echo(f"EVAL STATS: {model.stats()}")
         return model.report()
 
     def evaluate(self, dataloader, samples=float("inf"), iepoch=0):
+        self.model.reset()
         losses, istep, nsample, nchunk, nbatch = 0, 0, 0, 1, len(dataloader)
         device_ids = [i for i in range(self.cfg.num_gpus)]
         if isinstance(self.model, DistributedDataParallel):
@@ -245,7 +248,7 @@ class Monitor(Monitor):
 
             _, (_, loss_out) = self.model(**batch_dict)
             ntoken, loss_all = loss_out
-            loss = loss_all.sum()
+            loss = loss_all.sum() if isinstance(loss_all, Tensor) else loss_mean * ntoken
 
             total_word += ntoken
             epoch_step += 1

@@ -1,0 +1,26 @@
+name: MiniTFEncHead
+w2v_file: "" 
+w_dim: 128 # word
+cat_w: True # concatenate or average word vectors
+num_w: 4
+w_onehot: False
+m_dim: 512 # model
+f_dim: ${model.encoder.f_dim} # forward
+p_dim: 512 # position
+num_p: 4 
+cat_p: True 
+p_type: learned 
+num_layer: ${model.encoder.num_layer}
+p_dropout: ${model.encoder.p_dropout} # position dropout
+t_dropout: ${model.encoder.t_dropout} # transformer dropout
+attn_dropout: ${model.encoder.attn_dropout} 
+proj_dropout: ${model.encoder.t_dropout}
+attn_cls_intra: MiniTFAttention
+attn_cls_inter: null
+num_head: ${model.encoder.num_head}
+num_head_intra: ${model.encoder.num_head_intra}
+num_head_inter: null
+qk_scale: ${model.encoder.qk_scale} 
+activation: ${model.encoder.activation}
+skip_embed: True 
+ln_input: ${model.encoder.ln_input} 

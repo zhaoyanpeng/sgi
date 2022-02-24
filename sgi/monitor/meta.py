@@ -105,8 +105,9 @@ class Monitor(object):
             #self.echo(f"do step lr {old_lrs}")
 
         if force_eval or (self.cfg.rank == 0 and epoch_step % self.cfg.running.peep_rate == 0):
-            # msg = self.model.stats()
-            # self.echo(msg)
+            msg = self.model.stats()
+            if msg != "":
+                self.echo(msg)
             # example output if there is any
             #
             # overall stats 

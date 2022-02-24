@@ -27,6 +27,9 @@ def load_checkpoint(cfg, echo):
     elif nmodule == 5:
         backbone_head_sd, relation_head_sd, encoder_head_sd, decoder_head_sd, loss_head_sd = checkpoint["model"]
         return local_cfg, backbone_head_sd, relation_head_sd, encoder_head_sd, decoder_head_sd, loss_head_sd
+    elif nmodule == 6:
+        backbone_head_sd, relation_head_sd, encoder_head_sd, decoder_head_sd, loss_head_sd, vi_head_sd = checkpoint["model"]
+        return local_cfg, backbone_head_sd, relation_head_sd, encoder_head_sd, decoder_head_sd, loss_head_sd, vi_head_sd
     else:
         raise ValueError(f"I don't know how to parse the checkpoint: # module is {nmodule}.")
 

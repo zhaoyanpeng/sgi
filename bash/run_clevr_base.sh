@@ -39,26 +39,29 @@ eval_name="CLEVR_val_captions.one_hop.json"
 model_name="sgi.obj.test.sel."$data_name
 model_name="sgi.obj.epoch.50.x."$data_name
 model_name="sgi.test.lr.8h.d1.rnd.orel.pcat"
+model_name="sgi.tf.soft"
 mtask="alias_name=$model_name
 verbose=True optimizer.warmup=False optimizer.weight_decay=1e-6
 data.enc_vocab_name=$enc_vocab_name data.dec_vocab_name=$dec_vocab_name
 
-data.relation_words=[left,right]
-data.cate_type=atomic_object
-data.cate_max_len=64
-
-model.loss.optim_only_relation=True
+model.loss.optim_only_relation=False
 model.decoder.num_p=512
 model.encoder.num_p=4 model.encoder.cat_p=True model.encoder.p_dim=512
 optimizer.lr=5e-5 optimizer.scheduler=[MultiStepLR,{milestones:[15,36,45,50],gamma:0.5}]
 
 model.encoder.num_layer=2 model.encoder.num_head=8 model.encoder.t_dropout=0.0 model.encoder.p_dropout=0.0
-model.decoder.num_layer=1 model.encoder.num_head=8 model.decoder.t_dropout=0.0 model.encoder.p_dropout=0.0
+model.decoder.num_layer=2 model.encoder.num_head=8 model.decoder.t_dropout=0.0 model.encoder.p_dropout=0.0
 
 running.epochs=100 running.batch_size=50 running.peep_rate=100
 running.save_rate=1e9 running.save_epoch=True running.skip_save=True running.save_last=True
 data.eval_name=$eval_name data.eval_samples=1e6
 "
+
+
+#data.relation_words=[left,right]
+#data.cate_type=atomic_object
+#data.cate_max_len=64
+
 
 #data.relation_words=[left,front]
 #running.epochs=1 running.batch_size=2 running.peep_rate=1 running.save_rate=1e9 running.save_epoch=True

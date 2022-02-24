@@ -1,5 +1,6 @@
 from .helper import * 
 from .sgi import SGI 
+from .sgi_vi import ViSGI
 from .mini_tf import MiniTFLM
 
 from fvcore.common.registry import Registry
@@ -13,4 +14,5 @@ def build_main_model(cfg, echo):
     return SGI_MODELS_REGISTRY.get(cfg.worker)(cfg, echo)
 
 SGI_MODELS_REGISTRY.register(SGI)
+SGI_MODELS_REGISTRY.register(ViSGI)
 SGI_MODELS_REGISTRY.register(MiniTFLM)

@@ -1,0 +1,28 @@
+name: ViRNNDecoderHead
+rnn_type: LSTM
+bidirectional: False 
+hidden_size: 512
+num_layers: 2
+dropout: 0.
+# embedding layer 
+w2v_file: ${data.data_root}/${data.enc_w2v_name}
+w_dim: 512 # word
+m_dim: ${.w_dim}
+num_p: -1
+p_dim: -1
+p_type: null 
+ln_input: False 
+skip_embed: False 
+# attention layer
+attention:
+    src_dim: ${...encoder.m_dim}
+    tgt_dim: ${..hidden_size}
+    p_dist_type: categorical
+    q_dist_type: categorical
+    temperature: 1.
+    attn_size: 512
+    attn_type: mlp
+    attn_func: softmax
+    use_prior: False
+    nsample: 1
+    mode: exact

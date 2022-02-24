@@ -1,1 +1,9 @@
 from .decoder_head import build_decoder_head, DECODER_HEADS_REGISTRY
+
+from .rnn_head import RNNDecoderBase, StdRNNDecoder, InputFeedRNNDecoder
+from .vi_head import StdRNNDecoderHead, ViRNNDecoderHead
+
+DECODER_HEADS_REGISTRY.register(StdRNNDecoder)
+DECODER_HEADS_REGISTRY.register(InputFeedRNNDecoder)
+DECODER_HEADS_REGISTRY.register(ViRNNDecoderHead)
+DECODER_HEADS_REGISTRY.register(StdRNNDecoderHead)

@@ -7,8 +7,12 @@ from torch.nn.init import kaiming_uniform_, xavier_uniform_, xavier_normal_, nor
 #initializr = lambda x: xavier_uniform_(x)
 
 # embedders
+from .global_attn import *
+from .variational_attn import *
+from .sparsemax import sparsemax
 from .embedder import *
 from .mini_tf import *
+from .rnn import *
 # optimizer
 from .lars import * 
 # encoder heads
