@@ -32,8 +32,9 @@ class SGI(nn.Module):
         objects, rels, enc_extra = self.encoder_head(
             obj_names, *img_shape, bbox=obj_boxes, self_key_padding_mask=obj_masks, **kwargs
         ) 
+        self.decoder_head.init_state_from_memo(objects, obj_masks) # initialize the input feed
         logits, targets, dec_extra = self.decoder_head(
-            sequences, memory=objects, memo_key_padding_mask=obj_masks
+            sequences, memory=objects, memo_key_padding_mask=obj_masks, **kwargs
         )
         loss, outs = self.loss_head(logits, targets)
         if analyze:

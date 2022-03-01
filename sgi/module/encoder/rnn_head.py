@@ -6,28 +6,12 @@ from torch import nn, Tensor
 from torch.nn.utils.rnn import pack_padded_sequence
 from torch.nn.utils.rnn import pad_packed_sequence
 
-from .. import rnn_factory
-from .encoder_head import MetaEncHead
+from .rnn_base import RNNEncoderBase
 
-class RNNEncoder(MetaEncHead):
-    """ A generic recurrent neural network encoder.
-    """
+class RNNEncoder(RNNEncoderBase):
     def __init__(self, cfg, token_vocab, **kwargs):
-        super().__init__(cfg, token_vocab)
-        self.hidden_size = cfg.hidden_size
-        num_directions = 2 if cfg.bidirectional else 1
-        assert cfg.hidden_size % num_directions == 0
-        hidden_size = cfg.hidden_size // num_directions
-
-        self.rnn, self.no_pack_padded_seq = \
-            rnn_factory(
-                cfg.rnn_type,
-                input_size=self._input_size,
-                hidden_size=hidden_size,
-                num_layers=cfg.num_layers,
-                bidirectional=cfg.bidirectional,
-                dropout=cfg.dropout,
-            )
+        super().__init__(cfg, token_vocab, bidirectional=cfg.bidirectional)
+        self.encoder = self._build_rnn(cfg.rnn_type, **self.rnn_params)
 
     def forward(
         self, 
@@ -37,42 +21,30 @@ class RNNEncoder(MetaEncHead):
         self_attn_mask: Tensor=None,
         self_key_padding_mask: Tensor=None,
         attn_weight_type: str=None,
-        enforce_sorted=False,
-        batch_first=True, 
+        enforce_sorted: bool=False,
         **kwargs
     ):
         # x is expected to have been encoded by an external backbone
-        # and `_encode_position' will ignore all embedding stuff
+        # and `_encode_position' will ignore all the embedding stuff
         # batch, s_len, emb_dim = x.size()
-        x = self._encode_positions(x, bbox, img_shape)
+        # assert x.dim() == 3, f"Please embed `x' first."
+        x_embed = self._encode_positions(x, bbox, img_shape)
 
         lengths = (
             None if self_key_padding_mask is None 
             else (~self_key_padding_mask).sum(-1) 
         )
 
-        packed_emb = emb = x 
-        if lengths is not None and not self.no_pack_padded_seq:
-            # Lengths data is wrapped inside a Tensor.
-            lengths_list = lengths.cpu().view(-1).tolist()
+        packed_emb = x_embed
+        if lengths is not None:
+            length_list = lengths.cpu().view(-1).tolist()
             packed_emb = pack_padded_sequence(
-                emb, lengths_list, batch_first=batch_first, enforce_sorted=enforce_sorted
+                x_embed, length_list, batch_first=self.batch_first, enforce_sorted=enforce_sorted
             )
 
-        memory_bank, encoder_final = self.rnn(packed_emb)
+        rnn_outs, rnn_final = self.encoder(packed_emb)
 
-        if lengths is not None and not self.no_pack_padded_seq:
-            memory_bank, _ = pad_packed_sequence(memory_bank, batch_first=batch_first)
+        if lengths is not None:
+            rnn_outs, _ = pad_packed_sequence(rnn_outs, batch_first=self.batch_first)
 
-        return memory_bank, encoder_final, lengths
-
-    @property
-    def _input_size(self):
-        return self.emb_size
-
-    @property
-    def output_size(self):
-        return self.hidden_size
-
-    def update_dropout(self, dropout):
-        self.rnn.dropout = dropout
+        return rnn_outs, rnn_final, {}

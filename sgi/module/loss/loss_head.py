@@ -51,8 +51,9 @@ class LMLossHead(LossHead):
             nn.Parameter(torch.ones([]) * np.log(1 / 0.07)) if cfg.scaling else
             torch.ones([], requires_grad=False) * np.log(1 / 1)
         )
+        self.ignore_index = self.token_vocab.PAD_IDX
         self.loss_fn = nn.CrossEntropyLoss(
-            reduction="none", ignore_index=self.token_vocab.PAD_IDX
+            reduction="none", ignore_index=self.ignore_index
         )
         self.add_dummy = cfg.add_dummy
         self.cate_type = cfg.cate_type
@@ -103,7 +104,7 @@ class LMLossHead(LossHead):
         losses = losses.view(x2.size())
 
         loss_sum = losses.sum() 
-        ntoken = (x2 != self.token_vocab.PAD_IDX).sum()
+        ntoken = (x2 != self.ignore_index).sum()
         loss = loss_sum / ntoken
         return loss, (ntoken, losses)
 
@@ -113,7 +114,7 @@ class LMLossHead(LossHead):
         # overall and relation-specific loss
         x1 = x1.argmax(dim=-1).reshape(-1)
         x2 = x2.reshape(-1)
-        mask = x2 != self.token_vocab.PAD_IDX
+        mask = x2 != self.ignore_index
         for word, metric in self.accuracies.items():
             if word in self.relation_words: # overall loss
                 wid = self.relation_words[word]
@@ -133,6 +134,15 @@ class LMLossHead(LossHead):
         if self.optim_only_relation and self.training:
             logits, x2 = self.select(logits, x2)
         return self._estimate_loss(logits, x2)
+
+@LOSS_HEADS_REGISTRY.register()
+class MLMLossHead(LMLossHead):
+    def __init__(self, cfg, token_vocab, **kwargs):
+        super().__init__(cfg, token_vocab, **kwargs)
+        self.ignore_index = -100
+        self.loss_fn = nn.CrossEntropyLoss(
+            reduction="none", ignore_index=self.ignore_index
+        )
 
 @LOSS_HEADS_REGISTRY.register()
 class ViLMLossHead(LMLossHead):
@@ -176,25 +186,22 @@ class ViLMLossHead(LMLossHead):
         return self._compute_loss(decoder=decoder, **loss_state)
 
     def _decode(self, x, decoder, log_pa=None, pa=None):
-        # log_pa: T x N x S=K # target, K, batch, vocab
+        # log_pa: T x K x B x S # (T, K, B, V)
         scores = decoder.predictor(x).log_softmax(dim=-1)
-        if x.dim() == 3:
-            # Short-circuit
+        if x.dim() == 3: # short-circuit
             return scores
-        if scores.size(1) == 1:
+        if scores.size(1) == 1: # single sample
             scores = scores.squeeze(1)
         else:
-            if decoder.mode == "exact" and log_pa is not None:
-                # for exact marginal
+            if decoder.mode == "exact" and log_pa is not None: # for exact marginal over p
                 scores = scores + log_pa.transpose(1,2).unsqueeze(-1)
                 scores = scores.logsumexp(dim=1, keepdim=False)
-            elif decoder.mode == "enum" and pa is not None:
-                # for exact elbo
+            elif decoder.mode == "enum" and pa is not None: # for exact elbo over q
                 scores = scores * pa.transpose(1,2).unsqueeze(-1)
                 scores = scores.sum(dim=1, keepdim=False)
             elif decoder.mode == "wsram":
                 return scores
-            else:
+            else: # multiple samples w/ empirical mean
                 scores = scores.logsumexp(dim=1, keepdim=False)
                 scores = scores - math.log(x.size(1))
         return scores
@@ -280,6 +287,10 @@ class ViLMLossHead(LMLossHead):
             stats = Statistics(
                 xent.item(), kl.item(), non_padding.sum().item(), num_correct.item()
             )
+
+            if not self.training: # TODO hacky relation words
+                self.infer(scores_first, gtruth)
+
             return loss, (ntoken, stats)
 
         scores = scores.view(-1, scores.size(-1))
@@ -331,7 +342,7 @@ class ViLMLossHead(LMLossHead):
                 q = Categorical(q_alpha)
                 p = Categorical(p_alpha)
             else:
-                assert (False), f"dist_type: {decoder.dist_type}"
+                assert False, f"dist_type: {decoder.dist_type}"
             kl = kl_divergence(q, p).sum()
             loss = xent + self._alpha * kl
         else:

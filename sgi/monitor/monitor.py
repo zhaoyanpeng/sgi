@@ -15,7 +15,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 from ..util import numel
-from ..data import MetadataCatalog
+from ..data import MetadataCatalog, mask_tokens
 from ..data import build_clevr_dataset as build_dataset
 from ..data import process_clevr_batch as process_batch
 from ..data import build_copy_dataset, process_copy_batch
@@ -107,10 +107,19 @@ class Monitor(Monitor):
         obj_names_src = obj_names
         file_name = union["file_name"]
         obj_names = self.model.backbone(obj_names, obj_name_lengths)
+
+        mlm_inputs = mlm_labels = None
+        mlm_prob=self.cfg.data.mlm_prob
+        if mlm_prob > 0:
+            mlm_inputs, mlm_labels = mask_tokens(
+                sequences, mlm_prob, self.decoder_vocab, 
+                train=self.model.training, target_words=list(self.cfg.data.relation_words)
+            )
         return {
             "obj_idxes": obj_idxes, "obj_boxes": obj_boxes, "obj_names": obj_names, 
             "obj_masks": obj_masks, "sequences": sequences, "img_shape": img_shape,
-            "file_name": file_name, "obj_names_src": obj_names_src
+            "file_name": file_name, "obj_names_src": obj_names_src,
+            "mlm_inputs": mlm_inputs, "mlm_labels": mlm_labels,
         }
 
     def epoch(self, iepoch):
@@ -219,7 +228,9 @@ class Monitor(Monitor):
         self.echo(f"# sample {nsample}; {nsample / (time.time() - start_time):.2f} samples/s")
         result = " ".join([f"{k}: {v[0] / v[1]:.2E}" for k, v in loss_per_length.items()])
         self.echo(f"Length-Loss - {result}")
-        self.echo(f"EVAL STATS: {model.stats()}")
+        stats = model.stats()
+        if stats != "": # could be empty
+            self.echo(f"EVAL STATS: {model.stats()}")
         return model.report()
 
     def evaluate(self, dataloader, samples=float("inf"), iepoch=0):

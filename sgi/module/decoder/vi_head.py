@@ -5,50 +5,42 @@ from typing import Tuple
 from torch import nn, Tensor
 from collections import defaultdict
 
-from sgi.util import aeq, Params, DistInfo
-from .. import GlobalAttention, VariationalAttention
+from sgi.util import Params, DistInfo
 from .rnn_head import InputFeedRNNDecoder
+
+class StdRNNDecoderHead(InputFeedRNNDecoder):
+    def __init__(self, cfg, token_vocab):
+        super(StdRNNDecoderHead, self).__init__(cfg, token_vocab)
+        assert cfg.attention.name == "GlobalAttention"
+        self.dist_type = "none"
+        self.mode = "none"
 
 class ViRNNDecoderHead(InputFeedRNNDecoder):
     def __init__(self, cfg, token_vocab):
-        super(ViRNNDecoderHead, self).__init__(cfg, token_vocab, skip_attn=True)
-        cfg = cfg.attention
-        assert cfg is not None, f"the module has to be attentional but attention configs are missing"
-        self.mode = cfg.mode
-        self.dist_type = cfg.p_dist_type
-        self.attn = VariationalAttention(
-            src_dim         = cfg.src_dim,
-            tgt_dim         = cfg.tgt_dim,
-            attn_size       = cfg.attn_size,
-            temperature     = cfg.temperature,
-            p_dist_type     = cfg.p_dist_type,
-            q_dist_type     = cfg.q_dist_type,
-            use_prior       = cfg.use_prior,
-            attn_type       = cfg.attn_type,
-            attn_func       = cfg.attn_func,
-            nsample         = cfg.nsample,
-            mode            = cfg.mode,
-        )
+        super(ViRNNDecoderHead, self).__init__(cfg, token_vocab)
+        assert cfg.attention.name == "VariationalAttention"
+        self.dist_type = self.attn.p_dist_type
+        self.mode = self.attn.mode
 
-    def _run_forward_pass(self, tgt, memory_bank, memory_lengths=None, q_scores=None):
-        input_feed = self.state["input_feed"].squeeze(0)
+    def _run_forward_pass(
+        self, x, lengths, memory, memory_mask=None, enforce_sorted=False, q_scores=None
+    ):
         dec_state = self.state["hidden"]
+        dec_state = dec_state[0] if isinstance(self.encoder, nn.GRU) else dec_state
+        input_feed = self.state["input_feed"]
 
+        step_dim = 1 # as we have batch-first input
         attns = defaultdict(list)
         dist_infos = []
         baselines = []
         dec_outs = []
 
-        step_dim = 1 # as we have batch-first input
+        for i, emb in enumerate(x.split(1, dim=step_dim)):
+            emb = emb.squeeze(step_dim)
+            decoder_input = torch.cat([emb, input_feed], 1).unsqueeze(step_dim)
+            rnn_output, dec_state = self.encoder(decoder_input, dec_state)
+            rnn_output = rnn_output.squeeze(step_dim)
 
-        # input feed concatenates hidden state with input at every time step.
-        for i, emb_t in enumerate(tgt.split(1, dim=step_dim)):
-            decoder_input = torch.cat(
-                [emb_t.squeeze(step_dim), input_feed], 1
-            ).unsqueeze(0)
-            rnn_output, dec_state = self.rnn(decoder_input, dec_state)
-            rnn_output = rnn_output.squeeze(0) # remove length dim
-            
             q_scores_i = None
             if q_scores is not None:
                 q_scores_i = Params(
@@ -58,22 +50,15 @@ class ViRNNDecoderHead(InputFeedRNNDecoder):
                 )
                 attns["q"].append(q_scores.alpha[i])
 
-            # cross-attn
-            if self.attentional:
-                decoder_output, p_attn, input_feed, baseline, dist_info = self.attn(
-                    rnn_output, memory_bank, memory_lengths=memory_lengths, q_scores=q_scores_i
-                )
-                attns["std"].append(p_attn)
-                dist_infos.append(dist_info)
-            else:
-                decoder_output = rnn_output
+            decoder_output, p_attn, input_feed, baseline, dist_info = self.attn(
+                rnn_output, memory, memory_mask=memory_mask, q_scores=q_scores_i
+            )
 
-            decoder_output = self.dropout(decoder_output)
-            dec_outs.append(decoder_output)
-
+            dec_outs.append(self.dropout(decoder_output))
+            dist_infos.append(dist_info)
+            attns["std"].append(p_attn)
             if baseline is not None: # from p(a | x, c)
-                baseline = self.dropout(baseline)
-                baselines.append(baseline)
+                baselines.append(self.dropout(baseline))
 
         q_info = Params(
             alpha = q_scores.alpha,
@@ -102,9 +87,9 @@ class ViRNNDecoderHead(InputFeedRNNDecoder):
             q=q_info,
             p=p_info,
         )
-        return dec_state, input_feed, dec_outs, attns, baselines, dist_info
+        return dec_state, dec_outs, attns, baselines, dist_info
 
-    def create_loss_state(self, output, target, dist_info=None, baselines=None):
+    def _create_loss_state(self, output, target, dist_info=None, baselines=None):
         state = {"output": output, "target": target}
         if dist_info is not None:
             if dist_info.p is not None:
@@ -134,125 +119,44 @@ class ViRNNDecoderHead(InputFeedRNNDecoder):
 
     def forward( 
         self, 
-        tgt: Tensor,
+        x: Tensor,
         memory: Tensor=None,
         memo_attn_mask: Tensor=None,
         memo_key_padding_mask: Tensor=None,
-        q_scores=None,
+        enforce_sorted: bool=False,
+        q_scores: Tensor=None,
         **kwargs,
     ):
-        assert tgt.dim() == 2, f"expect tgt of shape (B, L)"
-        gold_tgt = tgt[:, 1:].transpose(0, 1).contiguous()
-        tgt = tgt[:, :-1] # see the past
-        tgt = self._encode_positions(tgt)
+        assert x.dim() == 2, f"expect x of shape (B, L)"
+        input_x = x[:, :-1] # causal LM sees the past
+        x_embed = self._encode_positions(input_x)
 
-        memory_lengths = (
-            None if memo_key_padding_mask is None 
-            else (~memo_key_padding_mask).sum(-1) 
+        x_mask = x == self.token_vocab.PAD_IDX
+        x_lengths = (~x_mask).sum(-1) - 1
+
+        dec_state, dec_outs, attns, baselines, dist_info = self._run_forward_pass(
+            x_embed, x_lengths, memory, q_scores=q_scores,
+            memory_mask=memo_key_padding_mask, enforce_sorted=enforce_sorted,
         )
 
-        # run the forward pass of the RNN
-        dec_state, input_feed, dec_outs, attns, baselines, dist_info = \
-            self._run_forward_pass(
-                tgt, memory, memory_lengths=memory_lengths, q_scores=q_scores
-            )
+        if not isinstance(dec_state, tuple):
+            dec_state = (dec_state,)
+        self.state["hidden"] = dec_state
 
-        # concatenates sequence of tensors along a new dimension
-        dec_outs = torch.stack(dec_outs, dim=0) # T x K x N x H
+        # batch-second outputs
+        if type(dec_outs) == list: # T x K x N x H
+            dec_outs = torch.stack(dec_outs)
+        for k in attns:
+            if type(attns[k]) == list:
+                attns[k] = torch.stack(attns[k])
         if len(baselines) > 0:
-            baselines = torch.stack(baselines, dim=0)
+            baselines = torch.stack(baselines)
         else:
             baselines = None
-        for k in attns:
-            attns[k] = torch.stack(attns[k])
 
-        # update the state with the result
-        if not isinstance(dec_state, tuple):
-            dec_state = (dec_state,)
-
-        loss_state = self.create_loss_state(
-            dec_outs, gold_tgt, dist_info=dist_info, baselines=baselines
+        gold_x = x[:, 1:].transpose(0, 1).contiguous()
+        #dec_outs = self.predictor(dec_outs)
+        loss_state = self._create_loss_state(
+            dec_outs, gold_x, baselines=baselines, dist_info=dist_info
         )
-
-        return dec_outs, gold_tgt, {"loss_state": loss_state, "attns": attns}
-
-
-class StdRNNDecoderHead(InputFeedRNNDecoder):
-    def __init__(self, cfg, token_vocab):
-        super(StdRNNDecoderHead, self).__init__(cfg, token_vocab, skip_attn=True)
-        cfg = cfg.attention
-        assert cfg is not None, f"the module has to be attentional but attention configs are missing"
-        self.mode = "none"
-        self.attn = GlobalAttention(
-            cfg.src_dim, cfg.tgt_dim, cfg.attn_size,
-            self.hidden_size, attn_type=cfg.attn_type, attn_func=cfg.attn_func
-        )
-
-    def _run_forward_pass(self, tgt, memory_bank, memory_lengths=None):
-        input_feed = self.state["input_feed"].squeeze(0)
-        dec_state = self.state["hidden"]
-
-        attns = defaultdict(list)
-        dec_outs = []
-
-        step_dim = 1 # as we have batch-first input
-
-        # input feed concatenates hidden state with input at every time step.
-        for i, emb_t in enumerate(tgt.split(1, dim=step_dim)):
-            decoder_input = torch.cat(
-                [emb_t.squeeze(step_dim), input_feed], 1
-            ).unsqueeze(0)
-            rnn_output, dec_state = self.rnn(decoder_input, dec_state)
-            rnn_output = rnn_output.squeeze(0) # remove length dim
-
-            if self.attentional:
-                decoder_output, p_attn, input_feed = self.attn(
-                    rnn_output, memory_bank, memory_lengths=memory_lengths
-                )
-                attns["std"].append(p_attn)
-            else:
-                decoder_output = rnn_output
-
-            decoder_output = self.dropout(decoder_output)
-            #input_feed = decoder_output
-
-            dec_outs += [decoder_output]
-
-        return dec_state, input_feed, dec_outs, attns
-
-    def forward(
-        self,
-        tgt: Tensor,
-        memory: Tensor=None,
-        memo_attn_mask: Tensor=None,
-        memo_key_padding_mask: Tensor=None,
-        **kwargs,
-    ):
-        assert tgt.dim() == 2, f"expect tgt of shape (B, L)"
-        gold_tgt = tgt[:, 1:].transpose(0, 1).contiguous()
-        tgt = tgt[:, :-1] # see the past
-        tgt = self._encode_positions(tgt)
-
-        memory_lengths = (
-            None if memo_key_padding_mask is None
-            else (~memo_key_padding_mask).sum(-1)
-        )
-
-        # run the forward pass of the RNN
-        dec_state, input_feed, dec_outs, attns = \
-            self._run_forward_pass(
-                tgt, memory, memory_lengths=memory_lengths
-            )
-
-        # concatenates sequence of tensors along a new dimension
-        dec_outs = torch.stack(dec_outs, dim=0) # T x K x N x H
-        for k in attns:
-            attns[k] = torch.stack(attns[k])
-
-        # update the state with the result
-        if not isinstance(dec_state, tuple):
-            dec_state = (dec_state,)
-
-        loss_state = {"output": dec_outs, "target": gold_tgt}
-
-        return dec_outs, gold_tgt, {"loss_state": loss_state, "attns": attns}
+        return dec_outs, gold_x, {"loss_state": loss_state, "attns": attns}

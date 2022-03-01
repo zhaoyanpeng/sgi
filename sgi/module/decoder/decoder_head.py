@@ -55,7 +55,7 @@ class MetaDecHead(nn.Module):
     def emb_size(self):
         return self._emb_size
 
-    def init_state_from_memo(self, memo, **args):
+    def init_state_from_memo(self, memo, mask, **args):
         pass
 
     def detach_state(self):
@@ -252,3 +252,54 @@ class TorchTFDecHead(MetaDecHead):
 
         x = self.predictor(x) 
         return x, o_seqs.contiguous(), {}
+
+@DECODER_HEADS_REGISTRY.register()
+class MiniTFMLMDecHead(MiniTFDecHead):
+    def forward(
+        self,
+        x: Tensor,
+        memory: Tensor=None,
+        memo_attn_mask: Tensor=None,
+        memo_key_padding_mask: Tensor=None,
+        mlm_inputs: Tensor=None,
+        mlm_labels: Tensor=None,
+        **kwargs,
+    ):
+        if memory is None: # may or may not have inter attention
+            memory = memo_attn_mask = memo_key_padding_mask = None
+        if False and not self.training:
+            return self.inference(
+                x,
+                memory=memory,
+                memo_attn_mask=memo_attn_mask,
+                memo_key_padding_mask=memo_key_padding_mask
+            )
+
+        i_seqs = mlm_inputs
+        self_key_padding_mask = (i_seqs == self.token_vocab.PAD_IDX)
+
+        x = self._encode_positions(i_seqs)
+
+        x, attn_weights = self.encoder(
+            x,
+            memory=memory,
+            self_attn_mask=None,
+            self_key_padding_mask=self_key_padding_mask,
+            memo_key_padding_mask=memo_key_padding_mask,
+            require_attn_weight=True
+        )
+
+        x = self.predictor(x)
+        return x, mlm_labels, {"attns": attn_weights}
+
+    def inference(
+        self,
+        x: Tensor,
+        memory: Tensor = None,
+        memo_attn_mask: Tensor = None,
+        memo_key_padding_mask: Tensor = None,
+        mlm_inputs: Tensor=None,
+        mlm_labels: Tensor=None,
+        **kwargs,
+    ):
+        pass

@@ -44,7 +44,7 @@ log
 old
 bash
 logs
-data
+./data
 scripts
 outputs
 *-Dockerfile

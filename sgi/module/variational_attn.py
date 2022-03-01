@@ -2,13 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from sgi.util import aeq, sequence_mask, Params, DistInfo
+from sgi.module import sparsemax
+from sgi.util import Params, DistInfo
 
-def sample_gumbel(input, K, eps=1e-20):
-    N = input.size(0)
-    T = input.size(1)
-    S = input.size(2)
-    noise = torch.rand((K, N, T, S)).to(input)
+def sample_gumbel(x, K, eps=1e-20):
+    N, T, S = x.shape[:3]
+    noise = torch.rand((K, N, T, S)).to(x)
     noise.add_(eps).log_().neg_()
     noise.add_(eps).log_().neg_()
     return noise
@@ -19,101 +18,93 @@ def gumbel_softmax_sample(log_probs, K, temperature):
     x = F.softmax(x, dim=-1)
     return x.view_as(log_probs)
 
-
 class VariationalAttention(nn.Module):
-    def __init__(
-        self, src_dim, tgt_dim,
-        attn_size,
-        temperature,
-        p_dist_type="categorical",
-        q_dist_type="categorical",
-        use_prior=False,
-        nsample=1,
-        mode="sample",
-        attn_type="mlp",
-        attn_func="softmax"
-    ):
+    def __init__(self, cfg, src_dim=None, tgt_dim=None, **kwargs):
         super(VariationalAttention, self).__init__()
+        src_dim = src_dim or cfg.src_dim
+        tgt_dim = tgt_dim or cfg.tgt_dim
+        attn_type = cfg.attn_type
+        attn_func = cfg.attn_func
+
+        self.temperature = cfg.temperature
+        self.p_dist_type = cfg.p_dist_type
+        self.q_dist_tyqe = cfg.q_dist_type
+        self.use_prior = cfg.use_prior
+        self.nsample = cfg.nsample
 
         self.src_dim = src_dim
         self.tgt_dim = tgt_dim
-        self.p_dist_type = p_dist_type
-        self.q_dist_tyqe = q_dist_type
-        self.use_prior = use_prior
-        self.n_samples = nsample
-        self.mode = mode
-        self.attn_type = attn_type
-        self.dim = attn_size
-        dim = self.dim
+        self.dim = cfg.attn_size
+
+        self.mode = cfg.mode
         self.k = 0
-        self.temperature = temperature
+
+        assert attn_type in ["dot", "general", "mlp"], (
+            f"Please select a valid attention type (got {attn_type})."
+        )
+        self.attn_type = attn_type
+        self.activation = nn.Tanh() if attn_type in ["general", "dot"] else nn.Identity()
+
+        assert attn_func in ["softmax", "sparsemax"], (
+            "Please select a valid attention function (got {attn_func})."
+        )
+        self.attn_func = F.softmax if attn_func == "softmax" else sparsemax
 
         if self.attn_type == "general":
             self.linear_in = nn.Linear(tgt_dim, src_dim, bias=False)
         elif self.attn_type == "mlp":
-            self.linear_context = nn.Linear(src_dim, dim, bias=False)
-            self.linear_query = nn.Linear(tgt_dim, dim, bias=False)
-            self.v = nn.Linear(dim, 1, bias=False)
+            self.linear_memory = nn.Linear(src_dim, self.dim, bias=False)
+            self.linear_source = nn.Linear(tgt_dim, self.dim, bias=False)
+            self.linear_in = nn.Linear(self.dim, 1, bias=False)
+
         # mlp wants it with bias
         out_bias = self.attn_type == "mlp"
         self.linear_out = nn.Linear(src_dim + tgt_dim, tgt_dim, bias=out_bias)
 
-        self.sm = nn.Softmax(dim=-1)
-        self.tanh = nn.Tanh()
-
     def score(self, h_t, h_s):
         """
         Args:
-          h_t (`FloatTensor`): sequence of queries `[batch x tgt_len x dim]`
-          h_s (`FloatTensor`): sequence of sources `[batch x src_len x dim]`
-
+          h_t (FloatTensor): sequence of queries ``(batch, tgt_len, dim)``
+          h_s (FloatTensor): sequence of sources ``(batch, src_len, dim``
         Returns:
-          :obj:`FloatTensor`:
-           raw attention scores (unnormalized) for each src index
-          `[batch x tgt_len x src_len]`
-
+          FloatTensor: raw attention scores (unnormalized) for each src index ``(batch, tgt_len, src_len)``
         """
+        B, S, H_s = h_s.size()
+        B, T, H_t = h_t.size()
 
-        # Check input sizes
-        src_batch, src_len, src_dim = h_s.size()
-        tgt_batch, tgt_len, tgt_dim = h_t.size()
-        aeq(src_batch, tgt_batch)
-
-        if self.attn_type == "general":
-            h_t_ = h_t.view(tgt_batch*tgt_len, tgt_dim)
-            h_t_ = self.linear_in(h_t_)
-            h_t = h_t_.view(tgt_batch, tgt_len, src_dim)
+        if self.attn_type in ["general", "dot"]:
+            if self.attn_type == "general":
+                h_t_ = h_t.view(B * T, H_t)
+                h_t_ = self.linear_in(h_t_)
+                h_t  = h_t_.view(B, T, H_s)
             h_s_ = h_s.transpose(1, 2)
-            # (batch, t_len, d) x (batch, d, s_len) --> (batch, t_len, s_len)
+            # (B, T, H) x (B, H, S) -> (B, T, S)
             return torch.bmm(h_t, h_s_)
         elif self.attn_type == "mlp":
-            dim = self.dim
-            wq = self.linear_query(h_t.view(-1, self.tgt_dim))
-            wq = wq.view(tgt_batch, tgt_len, 1, dim)
-            wq = wq.expand(tgt_batch, tgt_len, src_len, dim)
+            H = self.dim
+            wq = self.linear_source(h_t.contiguous().view(-1, H_t))
+            wq = wq.view(B, T, 1, H)
+            wq = wq.expand(B, T, S, H)
 
-            uh = self.linear_context(h_s.contiguous().view(-1, self.src_dim))
-            uh = uh.view(src_batch, 1, src_len, dim)
-            uh = uh.expand(src_batch, tgt_len, src_len, dim)
+            uh = self.linear_memory(h_s.contiguous().view(-1, H_s))
+            uh = uh.view(B, 1, S, H)
+            uh = uh.expand(B, T, S, H)
 
-            # (batch, t_len, s_len, d)
-            wquh = self.tanh(wq + uh)
+            # (B, T, S, H)
+            wquh = torch.tanh(wq + uh)
+            return self.linear_in(wquh.view(-1, H)).view(B, T, S)
 
-            return self.v(wquh.view(-1, dim)).view(tgt_batch, tgt_len, src_len)
-
-    def sample_attn(self, params, n_samples=1, lengths=None, mask=None):
+    def sample_attn(self, params, nsample=1):
         dist_type = params.dist_type
         if dist_type == "categorical":
             alpha = params.alpha
             log_alpha = params.log_alpha
-            K = n_samples
-            N = alpha.size(0)
-            T = alpha.size(1)
-            S = alpha.size(2)
+            K = nsample
+            N, T, S = alpha.shape[:3]
             attns_id = torch.distributions.categorical.Categorical(
                alpha.view(N*T, S)
             ).sample(
-                torch.Size([n_samples])
+                torch.Size([nsample])
             ).view(K, N, T, 1)
             attns = torch.Tensor(K, N, T, S).zero_().cuda()
             attns.scatter_(3, attns_id, 1)
@@ -126,15 +117,13 @@ class VariationalAttention(nn.Module):
             raise Exception("Unsupported dist")
         return attns, None
 
-    def sample_attn_gumbel(self, params, temperature, n_samples=1, lengths=None, mask=None):
+    def sample_attn_gumbel(self, params, temperature, nsample=1):
         dist_type = params.dist_type
         if dist_type == "categorical":
             alpha = params.alpha
             log_alpha = params.log_alpha
-            K = n_samples
-            N = alpha.size(0)
-            T = alpha.size(1)
-            S = alpha.size(2)
+            K = nsample
+            N, T, S = alpha.shape[:3]
             attns = gumbel_softmax_sample(log_alpha, K, temperature) # K, N, T, S
             # log alpha: K, N, T, S
             log_alpha = log_alpha.unsqueeze(0).expand(K, N, T, S)
@@ -143,20 +132,18 @@ class VariationalAttention(nn.Module):
             raise Exception("Unsupported dist")
         return attns, None
 
-    def sample_attn_wsram(self, q_scores, p_scores, n_samples=1, lengths=None, mask=None):
+    def sample_attn_wsram(self, q_scores, p_scores, nsample=1):
         dist_type = q_scores.dist_type
         assert p_scores.dist_type == dist_type
         if dist_type == "categorical":
             alpha_q = q_scores.alpha
             log_alpha_q = q_scores.log_alpha
-            K = n_samples
-            N = alpha_q.size(0)
-            T = alpha_q.size(1)
-            S = alpha_q.size(2)
+            K = nsample
+            N, T, S = alpha.shape[:3]
             attns_id = torch.distributions.categorical.Categorical(
                alpha_q.view(N*T, S)
             ).sample(
-                torch.Size([n_samples])
+                torch.Size([nsample])
             ).view(K, N, T, 1)
             attns = torch.Tensor(K, N, T, S).zero_().cuda()
             attns.scatter_(3, attns_id, 1)
@@ -172,34 +159,28 @@ class VariationalAttention(nn.Module):
         else:
             raise Exception("Unsupported dist")
 
-    def forward(self, input, memory_bank, memory_lengths=None, q_scores=None):
-        # one step input
-        if input.dim() == 2:
+    def forward(self, source, memory, memory_mask=None, q_scores=None, **kwargs):
+        one_step = False
+        if source.dim() == 2:
+            source = source.unsqueeze(1)
             one_step = True
-            input = input.unsqueeze(1)
-            if q_scores is not None:
-                # oh, I guess this is super messy
-                if q_scores.alpha is not None:
-                    q_scores = Params(
-                        alpha=q_scores.alpha.unsqueeze(1),
-                        log_alpha=q_scores.log_alpha.unsqueeze(1),
-                        dist_type=q_scores.dist_type,
-                    )
-        else:
-            one_step = False
+            if q_scores is not None and q_scores.alpha is not None:
+                q_scores = Params(
+                    alpha=q_scores.alpha.unsqueeze(1),
+                    log_alpha=q_scores.log_alpha.unsqueeze(1),
+                    dist_type=q_scores.dist_type,
+                )
 
-        batch, sourceL, dim = memory_bank.size()
-        batch_, targetL, dim_ = input.size()
-        aeq(batch, batch_)
+        B, S, H_s = memory.size()
+        B, T, H_t = source.size()
 
         # compute attention scores, as in Luong et al.
-        # Params should be T x N x S
+        # Params should be T x B x S
         if self.p_dist_type == "categorical":
-            scores = self.score(input, memory_bank)
-            if memory_lengths is not None:
-                # mask : N x T x S
-                mask = ~sequence_mask(memory_lengths)
-                mask = mask.unsqueeze(1)  # Make it broadcastable.
+            scores = self.score(source, memory)
+            if memory_mask is not None:
+                assert memory_mask.dim() == 2
+                mask = memory_mask.unsqueeze(1)
                 scores.data.masked_fill_(mask, float('-inf'))
             if self.k > 0 and self.k < scores.size(-1):
                 topk, idx = scores.data.topk(self.k)
@@ -209,7 +190,7 @@ class VariationalAttention(nn.Module):
             log_scores = F.log_softmax(scores, dim=-1)
             scores = log_scores.exp()
 
-            c_align_vectors = scores
+            p_attn = scores
 
             p_scores = Params(
                 alpha=scores,
@@ -217,82 +198,68 @@ class VariationalAttention(nn.Module):
                 dist_type=self.p_dist_type,
             )
 
-        # each context vector c_t is the weighted average
-        # over all the source hidden states
-        context_c = torch.bmm(c_align_vectors, memory_bank)
-        if self.mode != 'wsram':
-            concat_c = torch.cat([input, context_c], -1)
-            # N x T x H
-            h_c = self.tanh(self.linear_out(concat_c))
-        else:
-            h_c = None
+        # soft attention under p, also the input feed
+        p_ctx = torch.bmm(p_attn, memory) # (B, T, H_s)
 
-        # sample or enumerate
-        # y_align_vectors: K x N x T x S
+        baseline = None # under p
+        if self.mode != 'wsram': # baseline (B, T, H_t)
+            source_c = torch.cat([source, p_ctx], -1)
+            baseline = torch.tanh(self.linear_out(source_c))
+
+        # q_attn: K x N x T x S
         q_sample, p_sample, sample_log_probs = None, None, None
         sample_log_probs_q, sample_log_probs_p, sample_p_div_q_log = None, None, None
         if self.mode == "sample":
             if q_scores is None or self.use_prior:
                 p_sample, sample_log_probs = self.sample_attn(
-                    p_scores, n_samples=self.n_samples,
-                    lengths=memory_lengths, mask=mask if memory_lengths is not None else None)
-                y_align_vectors = p_sample
+                    p_scores, nsample=self.nsample,
+                )
+                q_attn = p_sample
             else:
                 q_sample, sample_log_probs = self.sample_attn(
-                    q_scores, n_samples=self.n_samples,
-                    lengths=memory_lengths, mask=mask if memory_lengths is not None else None)
-                y_align_vectors = q_sample
+                    q_scores, nsample=self.nsample,
+                )
+                q_attn = q_sample
         elif self.mode == "gumbel":
             if q_scores is None or self.use_prior:
                 p_sample, _ = self.sample_attn_gumbel(
-                    p_scores, self.temperature, n_samples=self.n_samples,
-                    lengths=memory_lengths, mask=mask if memory_lengths is not None else None)
-                y_align_vectors = p_sample
+                    p_scores, self.temperature, nsample=self.nsample,
+                )
+                q_attn = p_sample
             else:
                 q_sample, _ = self.sample_attn_gumbel(
-                    q_scores, self.temperature, n_samples=self.n_samples,
-                    lengths=memory_lengths, mask=mask if memory_lengths is not None else None)
-                y_align_vectors = q_sample
-        elif self.mode == "enum" or self.mode == "exact":
-            y_align_vectors = None
+                    q_scores, self.temperature, nsample=self.nsample,
+                )
+                q_attn = q_sample
         elif self.mode == "wsram":
             assert q_scores is not None
             q_sample, sample_log_probs_q, sample_log_probs_p, sample_p_div_q_log = self.sample_attn_wsram(
-                q_scores, p_scores, n_samples=self.n_samples,
-                lengths=memory_lengths, mask=mask if memory_lengths is not None else None)
-            y_align_vectors = q_sample
+                q_scores, p_scores, nsample=self.nsample,
+            )
+            q_attn = q_sample
+        elif self.mode == "enum" or self.mode == "exact":
+            q_attn = None
 
 
-        # context_y: K x N x T x H
-        if y_align_vectors is not None:
-            context_y = torch.bmm(
-                y_align_vectors.view(-1, targetL, sourceL),
-                memory_bank.unsqueeze(0).repeat(self.n_samples, 1, 1, 1).view(-1, sourceL, dim)
-            ).view(self.n_samples, batch, targetL, dim)
-        else:
-            # For enumerate, K = S.
-            # memory_bank: N x S x H
-            context_y = (memory_bank
-                .unsqueeze(0)
-                .repeat(targetL, 1, 1, 1) # T, N, S, H7
-                .permute(2, 1, 0, 3)) # S, N, T, H
-        input = input.unsqueeze(0).repeat(context_y.size(0), 1, 1, 1)
-        concat_y = torch.cat([input, context_y], -1)
-        # K x N x T x H
-        h_y = self.tanh(self.linear_out(concat_y))
+        if q_attn is not None:
+            q_ctx = torch.bmm(
+                q_attn.view(-1, T, S),
+                memory.unsqueeze(0).repeat(self.nsample, 1, 1, 1).view(-1, S, H_s)
+            ).view(self.nsample, B, T, H_s) # (K, B, T, H_s)
+        else: # K == S for enumeration
+            q_ctx = (
+                memory.unsqueeze(0).repeat(T, 1, 1, 1).permute(2, 1, 0, 3)
+            ) # (T, B, S, H_s) -> (S, B, T, H_s)
+        source = source.unsqueeze(0).repeat(q_ctx.shape[0], 1, 1, 1)
+        source_c = torch.cat([source, q_ctx], -1)
+        attn_h = torch.tanh(self.linear_out(source_c))
 
         if one_step:
-            if h_c is not None:
-                # N x H
-                h_c = h_c.squeeze(1)
-            # N x S
-            c_align_vectors = c_align_vectors.squeeze(1)
-            context_c = context_c.squeeze(1)
-
-            # K x N x H
-            h_y = h_y.squeeze(2)
-            # K x N x S
-            #y_align_vectors = y_align_vectors.squeeze(2)
+            if baseline is not None: # B x H
+                baseline = baseline.squeeze(1)
+            p_attn = p_attn.squeeze(1) # B x S
+            p_ctx = p_ctx.squeeze(1)   # B x H_s
+            attn_h = attn_h.squeeze(2) # K x N x H_t
 
             q_scores = Params(
                 alpha = q_scores.alpha.squeeze(1) if q_scores.alpha is not None else None,
@@ -309,14 +276,6 @@ class VariationalAttention(nn.Module):
                 dist_type = p_scores.dist_type,
                 samples = p_sample.squeeze(2) if p_sample is not None else None,
             )
-
-            if h_c is not None:
-                # Check output sizes
-                batch_, dim_ = h_c.size()
-                aeq(batch, batch_)
-                batch_, sourceL_ = c_align_vectors.size()
-                aeq(batch, batch_)
-                aeq(sourceL, sourceL_)
         else:
             raise Exception("`multi-step' not supported yet")
 
@@ -326,12 +285,6 @@ class VariationalAttention(nn.Module):
             p = p_scores,
         )
 
-        # h_y: samples from simplex
+        # attn_h: output features for prediction
         #   either K x N x H, or T x K x N x H
-        # h_c: convex combination of memory_bank for input feeding
-        #   either N x H, or T x N x H
-        # align_vectors: convex coefficients / boltzmann dist
-        #   either N x S, or T x N x S
-        # raw_scores: unnormalized scores
-        #   either N x S, or T x N x S
-        return h_y, c_align_vectors, context_c, h_c, dist_info
+        return attn_h, p_attn, p_ctx, baseline, dist_info

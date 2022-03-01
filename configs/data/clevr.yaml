@@ -1,0 +1,24 @@
+name: clevr
+num_proc: ${num_proc}
+data_root: ""
+data_name: "" 
+eval_name: "" 
+test_name: "" 
+data_seed: null
+train_samples: 1e9
+eval_samples: 250
+test_samples: 5000
+batch_size: ${running.batch_size}
+min_length: 2 
+max_length: 40 
+max_num_obj: 26
+enc_vocab_name: ""
+dec_vocab_name: ""
+enc_w2v_name: ""
+dec_w2v_name: ""
+add_dummy: False
+cate_type: "" # how to concatenate attribute words as a caption
+cate_max_len: 40 # max length of the captions generated from `cate_type'
+dummy_pos_type: "" # all (0, 0, w, h); min (0, 0, 0, 0); max (w, h, w, h); mid (w/2, h/2, w/2, h/2) 
+relation_words: [left, right, front, behind]
+mlm_prob: -0.

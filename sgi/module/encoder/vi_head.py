@@ -47,7 +47,7 @@ class BiEncInference(nn.Module):
         )
 
         sli = slice(None, -1) if self.only_past else slice(1, None)
-        tgt = tgt[:, sli] # truncked target sequences
+        tgt = tgt[:, sli] # chunked target sequences
         if tgt_key_padding_mask is not None:
             tgt_key_padding_mask = tgt_key_padding_mask[:, sli]
         if tgt_attn_mask is not None:
@@ -66,12 +66,13 @@ class BiEncInference(nn.Module):
         )
 
         if src_key_padding_mask is not None:
-            attn_mask = src_key_padding_mask.unsqueeze(1)
-            scores.masked_fill_(attn_mask, float('-inf'))
+            mask = src_key_padding_mask.unsqueeze(1)
+            scores.masked_fill_(mask, float('-inf'))
 
+        # batch-second outputs
         scores = scores.transpose(0, 1)
-        alpha = scores.softmax(dim=-1)
         log_alpha = scores.log_softmax(dim=-1)
+        alpha = scores.softmax(dim=-1)
 
         scores = Params(
             alpha=alpha, log_alpha=log_alpha, dist_type=self.dist_type,
