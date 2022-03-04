@@ -27,3 +27,5 @@ ln_input: True
 num_relation: 32
 tie_head_rel: False
 use_only_pos: False
+sign_q: False
+sign_k: False

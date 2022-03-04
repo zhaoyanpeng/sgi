@@ -49,6 +49,9 @@ class CatThenAttendRNNDecoderHead(BiRNNDecoderBase):
     def _run_forward_pass(
         self, x, lengths, memory, memory_mask=None, enforce_sorted=False
     ):
+        assert False, f"there is bug yet to be fixed."
+        # FIXME when num_layers > 1 the encoder will break causality.
+        """
         length_list = lengths.cpu().view(-1).tolist()
         packed_emb = pack_padded_sequence(
             x, length_list, batch_first=self.batch_first, enforce_sorted=enforce_sorted
@@ -58,9 +61,9 @@ class CatThenAttendRNNDecoderHead(BiRNNDecoderBase):
         rnn_outs, _ = pad_packed_sequence(rnn_outs, batch_first=self.batch_first)
         
         # CAT create causal repr.
-        B, L = rnn_outs.shape[:2]
         forward, reverse = rnn_outs.chunk(2, dim=-1)
         rnn_outs = bidirectional_causality(forward, reverse)
+        """
 
         # ATTEND source context selection
         attns = defaultdict(list)
@@ -72,9 +75,8 @@ class CatThenAttendRNNDecoderHead(BiRNNDecoderBase):
             decoder_output, p_attn, _ = self.attn(
                 rnn_output, memory, memory_mask=memory_mask
             )
-            decoder_output = self.dropout(decoder_output)
+            dec_outs.append(self.dropout(decoder_output))
             attns["std"].append(p_attn)
-            dec_outs += [decoder_output]
 
         # concat sequence of tensors along the time dim 
         dec_outs = torch.stack(dec_outs, dim=1) # (B, L, H)

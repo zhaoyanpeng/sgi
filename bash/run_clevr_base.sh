@@ -27,11 +27,11 @@ dec_vocab_name="captions_train.pos.topk.dict"
 enc_vocab_name="object_label.split.train.70k.topk.dict"
 dec_vocab_name="captions_train.70k.topk.dict"
 
-data_name="CLEVR_train_captions.70k.one_hop.json"
-eval_name="CLEVR_val_captions.one_hop.json"
-
 data_name="CLEVR_train_captions.toy.json"
 eval_name="CLEVR_train_captions.toy.json"
+
+data_name="CLEVR_train_captions.70k.one_hop.json"
+eval_name="CLEVR_val_captions.one_hop.json"
 
 # bash bash/run_clevr_base.sh default 0
 
@@ -40,35 +40,44 @@ model_name="sgi.obj.test.sel."$data_name
 model_name="sgi.obj.epoch.50.x."$data_name
 model_name="sgi.test.lr.8h.d1.rnd.orel.pcat"
 model_name="sgi.tf.soft"
+model_name="sgi.tf.mlm_p2.l3.h16"
+model_name="sgi.tf.mlm_p2.lr"
+model_name="sgi.tf.mlm_p2.lr.w.oro.rnd"
+model_name="sgi.tf.mlm_p2.lr.atomic.rnd"
+model_name="sgi.tf.mlm_p2.lr.fixed.rnd"
 model_name="sgi.tf.test"
 mtask="alias_name=$model_name
 verbose=True optimizer.warmup=False optimizer.weight_decay=1e-6
 data.enc_vocab_name=$enc_vocab_name data.dec_vocab_name=$dec_vocab_name
 
-data.mlm_prob=0.2
-model.loss.optim_only_relation=False
+data.cate_type=atomic_object
+data.cate_max_len=1
+
+data.mlm_prob=0.1
+data.relation_words=[left,right]
 model.loss.name=MLMLossHead
 model.decoder.name=MiniTFMLMDecHead
+model.loss.optim_only_relation=False
 model.decoder.num_p=512
-model.encoder.num_p=4 model.encoder.cat_p=True model.encoder.p_dim=512
+model.encoder.num_p=4 model.encoder.cat_p=False model.encoder.p_dim=512 model.encoder.p_type=learned
 optimizer.lr=5e-5 optimizer.scheduler=[MultiStepLR,{milestones:[15,36,45,50],gamma:0.5}]
 
-model.encoder.num_layer=2 model.encoder.num_head=8 model.encoder.t_dropout=0.0 model.encoder.p_dropout=0.0
-model.decoder.num_layer=2 model.encoder.num_head=8 model.decoder.t_dropout=0.0 model.encoder.p_dropout=0.0
+model.encoder.activation=tanh
+model.decoder.activation=tanh
+model.encoder.num_layer=2 model.encoder.num_head=32 model.encoder.t_dropout=0.0 model.encoder.p_dropout=0.0
+model.decoder.num_layer=2 model.decoder.num_head=32 model.decoder.t_dropout=0.0 model.decoder.p_dropout=0.0
 
-running.epochs=100 running.batch_size=50 running.peep_rate=100
+running.epochs=20 running.batch_size=50 running.peep_rate=100
 running.save_rate=1e9 running.save_epoch=True running.skip_save=True running.save_last=True
 
-running.epochs=1 running.batch_size=3 running.peep_rate=1 running.save_rate=1e9 running.save_epoch=True running.save_last=False
 
 data.eval_name=$eval_name data.eval_samples=1e6
 "
 
+#running.epochs=1 running.batch_size=3 running.peep_rate=1 running.save_rate=1e9 running.save_epoch=True running.save_last=False
 
-#data.relation_words=[left,right]
 #data.cate_type=atomic_object
 #data.cate_max_len=64
-
 
 #data.relation_words=[left,front]
 #running.epochs=1 running.batch_size=2 running.peep_rate=1 running.save_rate=1e9 running.save_epoch=True

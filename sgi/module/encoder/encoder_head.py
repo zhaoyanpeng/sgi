@@ -6,6 +6,8 @@ from torch import nn, Tensor
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
+import torch.nn.functional as F
+
 from fvcore.common.registry import Registry
 
 from .. import PositionalEncoder, PartiallyFixedEmbedding
@@ -120,20 +122,28 @@ class MetaEncHead(nn.Module):
 
     def _encode_positions(self, x, bbox, img_shape):
         if self.position_embed is not None:
-            assert bbox is not None
-            if bbox.dtype == torch.int64: # integer indice
+            #assert bbox is not None
+            if bbox is None:
+                positions = self.position_embed.weight[:, :x.shape[1]]
+                positions = positions.transpose(0, 1).unsqueeze(0).expand(x.shape[0], -1, -1)
+            elif bbox.dtype == torch.int64: # integer indice
                 shape = bbox.shape + (-1,)
                 positions = self.position_embed.weight[:, bbox.reshape(-1)] # bias discarded
                 positions = positions.transpose(0, 1).view(shape)
             elif isinstance(self.position_embed, PositionalEncoder):
                 (h, w) = img_shape[:2]
+                bbox = bbox.clone()
                 bbox[:, :, 0::2] *= w # w 
                 bbox[:, :, 1::2] *= h # h 
                 shape = bbox.shape[:2] + (-1,)
                 positions = self.position_embed.encode(bbox.long())
                 positions = positions.view(shape)
             else:
+                bbox = bbox.clone()
+                bbox[:, :, 1:] = 0. # only x matters for left / right relation
+                bbox = bbox * 10 # might make it easier to learn?
                 positions = self.position_embed(bbox)
+                #positions = F.relu(positions)
             if self.cat_p:
                 x = torch.cat([x, positions], -1)
             else:
@@ -150,6 +160,7 @@ class MetaEncHead(nn.Module):
                     pad = torch.zeros_like(cx)
                     x = torch.cat([x, cx, cy, pad, pad], -1)
                 elif self.p_dim == 1:
+                    #cx = bbox[:, :, [0]] # x axis
                     cx = (bbox[:, :, [0]] + bbox[:, :, [2]]) / 2
                     pad = torch.zeros_like(cx)
                     x = torch.cat([x, cx, pad, pad, pad], -1)
@@ -163,18 +174,22 @@ class MiniTFEncHead(MetaEncHead):
     """
     def __init__(self, cfg, token_vocab, **kwargs):
         super().__init__(cfg, token_vocab)
-        layer_fn = lambda : MiniTFBlock(
-            cfg.m_dim, cfg.num_head, cfg.f_dim, cfg.attn_cls_intra, 
-            attn_cls_inter=cfg.attn_cls_inter, 
-            dropout=cfg.t_dropout, 
-            qk_scale=cfg.qk_scale,
-            activation=cfg.activation,
-            attn_dropout=cfg.attn_dropout,
-            proj_dropout=cfg.proj_dropout,
-            num_head_intra=cfg.num_head_intra,
-            num_head_inter=cfg.num_head_inter,
-        )
-        self.encoder = MiniTF(layer_fn, cfg.num_layer) 
+        self.encoder = None
+        if cfg.num_layer > 0: 
+            layer_fn = lambda : MiniTFBlock(
+                cfg.m_dim, cfg.num_head, cfg.f_dim, cfg.attn_cls_intra,
+                attn_cls_inter=cfg.attn_cls_inter,
+                dropout=cfg.t_dropout,
+                qk_scale=cfg.qk_scale,
+                activation=cfg.activation,
+                attn_dropout=cfg.attn_dropout,
+                proj_dropout=cfg.proj_dropout,
+                num_head_intra=cfg.num_head_intra,
+                num_head_inter=cfg.num_head_inter,
+                sign_q=cfg.sign_q,
+                sign_k=cfg.sign_k,
+            )
+            self.encoder = MiniTF(layer_fn, cfg.num_layer)
 
         self._reset_parameters()
 
@@ -188,7 +203,11 @@ class MiniTFEncHead(MetaEncHead):
         attn_weight_type: str=None,
         **kwargs
     ):
+        #bbox = None if True else bbox
         x = self._encode_positions(x, bbox, img_shape)
+
+        if self.encoder is None:
+            return x, None, None
 
         x, _ = self.encoder(
             x, self_key_padding_mask=self_key_padding_mask, **kwargs,

@@ -21,3 +21,5 @@ activation: gelu
 skip_embed: False
 ln_input: True 
 max_dec_len: 30  
+sign_q: False
+sign_k: False

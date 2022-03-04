@@ -39,7 +39,7 @@ class SGI(nn.Module):
         loss, outs = self.loss_head(logits, targets)
         if analyze:
             self.analyze(
-                obj_names=obj_names_src, obj_masks=obj_masks, sequences=sequences,
+                obj_names=obj_names_src, obj_masks=obj_masks, sequences=sequences, logits=logits,
                 obj_boxes=obj_boxes, file_name=file_name, enc_extra=enc_extra, dec_extra=dec_extra,
             )
         return loss, (rels, outs) 

@@ -66,13 +66,13 @@ class LMLossHead(LossHead):
         self.reduce = False 
 
     def select(self, logit, target):
-        if self.cate_type == "atomic_object":
+        if self.cate_type == "1_atomic_object":
             sel_logit = logit[:, 2::3]
             sel_target = target[:, 2::3]
-        elif "_oor" in self.cate_type:
+        elif "1_oor" in self.cate_type:
             sel_logit = logit[:, 8::9]
             sel_target = target[:, 8::9]
-        elif "_oro" in self.cate_type:
+        elif "1_oro" in self.cate_type:
             sel_logit = logit[:, 4::9]
             sel_target = target[:, 4::9]
         else:
@@ -105,7 +105,7 @@ class LMLossHead(LossHead):
 
         loss_sum = losses.sum() 
         ntoken = (x2 != self.ignore_index).sum()
-        loss = loss_sum / ntoken
+        loss = (loss_sum / ntoken) if ntoken > 0 else loss_sum
         return loss, (ntoken, losses)
 
     def infer(self, x1, x2, *args, **kwargs): 

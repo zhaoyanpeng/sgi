@@ -2,10 +2,13 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 import torch.nn.functional as F
 from torch import nn, Tensor
 
+from . import sign
+
 __all__ = [
     "MiniTF", 
     "MiniTFBlock",
     "MiniTFAttention",
+    "SignTFAttention",
     "RelationTFAttention",
     "_get_activation_fn",
     "_get_initializr_fn",
@@ -15,6 +18,7 @@ __all__ = [
 _get_activation_fn = {
     "relu": nn.ReLU(),
     "gelu": nn.GELU(),
+    "tanh": nn.Tanh(),
 }
 
 _get_initializr_fn = {
@@ -92,10 +96,11 @@ class MiniTFBlock(MetaModule):
         proj_dropout: float = .0,
         num_head_intra: int = None,
         num_head_inter: int = None,
+        **kwargs,
     ):
         super().__init__()
         self.intra_attn = eval(attn_cls_intra)(
-            D, num_head_intra or N, attn_dropout=attn_dropout, proj_dropout=proj_dropout
+            D, num_head_intra or N, attn_dropout=attn_dropout, proj_dropout=proj_dropout, **kwargs
         ) 
         self.intra_attn_ln = nn.LayerNorm(D)
         self.intra_attn_dp = nn.Dropout(dropout)
@@ -111,7 +116,7 @@ class MiniTFBlock(MetaModule):
 
         if attn_cls_inter is not None:
             self.inter_attn = eval(attn_cls_inter)(
-                D, num_head_inter or N, attn_dropout=attn_dropout, proj_dropout=proj_dropout
+                D, num_head_inter or N, attn_dropout=attn_dropout, proj_dropout=proj_dropout, **kwargs
             )
             self.inter_attn_ln = nn.LayerNorm(D)
             self.inter_attn_dp = nn.Dropout(dropout) 
@@ -196,7 +201,7 @@ class MiniTFAttention(MetaModule):
             num_bias = 3 * D
         elif self.kdim == self.vdim:
             self.proj_weight = nn.Parameter(Tensor(2 * D, kdim))
-            self.q_proj = nn.Linear(self.kdim, 1 * D, bias=bias)
+            self.q_proj = nn.Linear(D, 1 * D, bias=bias)
             self.register_parameter("k_proj", None)
             self.register_parameter("v_proj", None)
             num_bias = 2 * D
@@ -280,7 +285,7 @@ class MiniTFAttention(MetaModule):
         )
     def _proj_v(self, x):
         return (self._in_proj(x, start=self.D, end=2 * self.D) 
-            if v_proj is None else self.v_proj(x)
+            if self.v_proj is None else self.v_proj(x)
         )
     def _proj_q(self, x):
         return (self._in_proj(x, start=2 * self.D) 
@@ -351,3 +356,137 @@ class RelationTFAttention(MiniTFAttention):
 
         x = self.proj_dp(self.proj(x))
         return x, attn_weight
+
+class SignTFAttention(MiniTFAttention):
+    def __init__(
+        self,
+        D: int,
+        N: int,
+        kdim: int = None,
+        vdim: int = None,
+        bias: bool = True,
+        qk_scale: float = None,
+        attn_dropout: float = .0,
+        proj_dropout: float = .0,
+        sign_q: bool = False,
+        sign_k: bool = False,
+        **kwargs,
+    ):
+        super().__init__(
+            D, N,
+            kdim=kdim,
+            vdim=vdim,
+            bias=bias,
+            qk_scale=qk_scale,
+            attn_dropout=attn_dropout,
+            proj_dropout=proj_dropout,
+        )
+        self.sign_q = sign_q
+        self.sign_k = sign_k
+        if self.kdim == D:
+            nchunk = self.sign_q + self.sign_k
+            self.sign_proj = nn.Linear(D, nchunk * D, bias=bias)
+            self.register_parameter("q_sign_proj", None)
+            self.register_parameter("k_sign_proj", None)
+        else:
+            self.register_parameter("sign_proj", None)
+            if not self.sign_q:
+                self.register_parameter("q_sign_proj", None)
+            else:
+                self.q_sign_proj = nn.Linear(D, 1 * D, bias=bias)
+            if not self.sign_k:
+                self.register_parameter("k_sign_proj", None)
+            else:
+                self.k_sign_proj = nn.Linear(kdim, 1 * D, bias=bias)
+
+    def forward(
+        self,
+        q: Tensor,
+        k: Tensor,
+        v: Tensor,
+        attn_mask: Tensor = None,
+        key_padding_mask: Tensor = None,
+        **kwargs
+    ):
+        old_q, old_k = q, k
+        if q.data_ptr() == k.data_ptr() == v.data_ptr():
+            k, v, q = self._proj_qkv(q)
+        elif k.data_ptr() == v.data_ptr():
+            k, v = self._proj_kv(k)
+            q = self._proj_q(q)
+        else:
+            q = self._proj_q(q)
+            k = self._proj_k(k)
+            v = self._proj_v(v)
+
+        if old_q.data_ptr() == old_k.data_ptr():
+            sq, sk = self._sign_proj_qk(old_q)
+        else:
+            sq = self._sign_proj_q(old_q)
+            sk = self._sign_proj_k(old_k)
+        sq = q if sq is None else sq
+        sk = k if sk is None else sk
+
+        B, T, S = q.shape[0], q.shape[1], k.shape[1]
+
+        # (B, L, D) -> (B, L, N, H) -> (B, N, L, H)
+        q = q.contiguous().reshape(B, T, self.N, self.H).permute(0, 2, 1, 3)
+        k = k.contiguous().reshape(B, S, self.N, self.H).permute(0, 2, 1, 3)
+        v = v.contiguous().reshape(B, S, self.N, self.H).permute(0, 2, 1, 3)
+
+        attn_weight = (q @ k.transpose(-1, -2)) * self.qk_scale # (B, N, T, S)
+
+        sq = sq.contiguous().reshape(B, T, self.N, self.H).permute(0, 2, 1, 3)
+        sk = sk.contiguous().reshape(B, S, self.N, self.H).permute(0, 2, 1, 3)
+
+        sign_weight = sign(sq @ sk.transpose(-1, -2)) # (B, N, T, S)
+
+        if attn_mask is not None:
+            if attn_mask.dim() == 3: # (B, T, S) instance-specific
+                attn_mask = attn_mask.unsqueeze(1)
+            elif attn_mask.dim() == 2: #  (T, S) shared within the batch
+                attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)
+            attn_weight.masked_fill_(attn_mask, float('-inf'))
+
+        if key_padding_mask is not None: # (B, T) instance-specific
+            attn_mask = key_padding_mask.unsqueeze(1).unsqueeze(2)
+            attn_weight.masked_fill_(attn_mask, float('-inf'))
+
+        attn_weight = self.attn_dp(attn_weight.softmax(dim=-1))
+        attn_weight = attn_weight * sign_weight
+        x = (attn_weight @ v).transpose(1, 2).reshape(B, T, self.D)
+        x = self.proj_dp(self.proj(x))
+        return x, attn_weight
+
+    def _sign_proj_qk(self, x):
+        #qk = self._sign_in_proj(x)
+        qk = self.sign_proj(x)
+        if qk.shape[-1] == 0:
+            q, k = None, None
+        elif qk.shape[-1] == 2 * self.D:
+            q, k = qk.chunk(2, dim=-1)
+        elif self.sign_q:
+            q, k = qk, None
+        elif self.sign_k:
+            q, k = None, qk
+        return q, k
+
+    def _sign_proj_q(self, x):
+        return ((self._sign_in_proj(x, end=self.D)
+            if self.q_sign_proj is None else self.q_sign_proj(x)
+        ) if self.sign_q else None)
+
+    def _sign_proj_k(self, x):
+        return ((self._sign_in_proj(x, start=self.D)
+            if self.k_sign_proj is None else self.k_sign_proj(x)
+        ) if self.sign_k else None)
+
+    def _sign_in_proj(self, x, start=0, end=None):
+        if self.sign_proj.out_features == start:
+            end = start
+            start = 0
+        weight = self.sign_proj.weight[start : end]
+        bias = (
+            None if self.sign_proj.bias is None else self.sign_proj.bias[start : end]
+        )
+        return F.linear(x, weight, bias)

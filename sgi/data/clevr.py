@@ -12,6 +12,34 @@ from . import MetadataCatalog, DatasetCatalog, SortedSequentialSampler, register
 from ..module import PositionalEncoder
 from .toy import build_dataloader
 
+def compute_all_relationships(scene_struct, objects, eps=0.2):
+  """
+  Computes relationships between all pairs of objects in the scene.
+
+  Returns a dictionary mapping string relationship names to lists of lists of
+  integers, where output[rel][i] gives a list of object indices that have the
+  relationship rel with object i. For example if j is in output['left'][i] then
+  object j is left of object i.
+
+  https://github.com/facebookresearch/clevr-dataset-gen/blob/f0ce2c81750bfae09b5bf94d009f42e055f2cb3a/image_generation/render_images.py#L448
+  """
+  all_relationships = {}
+  for name, direction_vec in scene_struct['directions'].items():
+    if name == 'above' or name == 'below': continue
+    all_relationships[name] = []
+    for i, obj1 in enumerate(objects): #scene_struct['objects']):
+      coords1 = obj1['3d_coords']
+      related = set()
+      for j, obj2 in enumerate(objects): #scene_struct['objects']):
+        if obj1 == obj2: continue
+        coords2 = obj2['3d_coords']
+        diff = [coords2[k] - coords1[k] for k in [0, 1, 2]]
+        dot = sum(diff[k] * direction_vec[k] for k in [0, 1, 2])
+        if dot > eps:
+          related.add(j)
+      all_relationships[name].append(sorted(list(related)))
+  return all_relationships
+
 class ClevrDataLoader(torch.utils.data.Dataset):
     UNK = "<unk>"
     DUM = "<dum>"
@@ -36,7 +64,12 @@ class ClevrDataLoader(torch.utils.data.Dataset):
             obj_names = list()
             obj_boxes = list()
             obj_classes = list()
-            for anno in sorted(item["annotations"], key=lambda x: x["obj_id"]):
+
+            #sorted_annos = sorted(item["annotations"], key=lambda x: x["obj_id"])
+            sorted_annos = sorted(item["annotations"], key=lambda x: x["bbox"][0])
+            relations = compute_all_relationships(item, sorted_annos)
+
+            for anno in sorted_annos:
                 x, y, w, h = anno["bbox"]
                 obj_boxes.append([
                       x / self.image_size[1], y / self.image_size[0],
@@ -81,7 +114,8 @@ class ClevrDataLoader(torch.utils.data.Dataset):
                         if cate_type == "atomic_object": # list of [int, int, int]
                             rel_idx = cate_vocab(rel)
                             for x_rel_of_cate in relations[rel][idx]:
-                                token = [obj_cates[x_rel_of_cate], cate, rel_idx]
+                                token = [obj_cates[x_rel_of_cate], rel_idx, cate]
+                                #token = [obj_cates[x_rel_of_cate], cate, rel_idx]
                                 new_caption.append(token) 
                         elif cate_type == "atomic_triplet": # list of [str] 
                             for x_rel_of_cate in relations[rel][idx]:
@@ -108,16 +142,33 @@ class ClevrDataLoader(torch.utils.data.Dataset):
                     rels.insert(0, 0)
                 rel_list.insert(0, list(range(1, nobj + 1)))
 
+        def filter_captions(captions):
+            relations = list(cfg.relation_words)
+            if cate_type is not None or len(relations) == 0:
+                return captions
+            #print("\n".join([" ".join(x) for x in captions]))
+            final = list()
+            for caption in captions:
+                for relation in relations:
+                    if relation in caption:
+                        final.append(caption)
+                        break
+            #print("\n".join([" ".join(x) for x in final]))
+            return final
+
         self.dataset = []
         with open(data_file, "r") as fr:
             for line in fr:
                 item = json.loads(line)
+                captions = filter_captions(item["captions"])
+                if len(captions) == 0:
+                    continue
                 if cfg.add_dummy:
                     manipulate_relations(item)
                 new_item = {
                     "relations": item["relationships"],
                     "file_name": item["file_name"], 
-                    "caption": item["captions"],
+                    "caption": captions,
                 }
                 (
                     new_item["obj_idxes"], 
@@ -126,6 +177,10 @@ class ClevrDataLoader(torch.utils.data.Dataset):
                     new_item["obj_classes"], 
                     new_item["new_caption"]
                 ) = process_fields(item)
+
+                if len(new_item["obj_classes"]) != len(set(new_item["obj_classes"])):
+                    continue # ambiguity
+
                 self.dataset.append(new_item)
         self.length = len(self.dataset)
 
@@ -205,6 +260,15 @@ def register_clevr_metadata(name="clevr"):
         "thing_colors": thing_colors,
     }
     MetadataCatalog.get(name).set(**metadata)
+
+def connect_class2token(vocab, meta):
+    classes = meta.thing_classes
+    token2class = dict()
+    for iclass, name in enumerate(classes):
+        if not vocab.has(name):
+            assert False, f"{name} is not in vocab."
+        token2class[vocab(name)] = iclass
+    return token2class
 
 def process_boxes(obj_boxes, add_dummy=False, dummy_pos_type="min"):
     """ create pos for the dummy object.

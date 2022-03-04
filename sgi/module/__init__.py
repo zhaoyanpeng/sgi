@@ -6,6 +6,7 @@ from torch.nn.init import kaiming_uniform_, xavier_uniform_, xavier_normal_, nor
 #initializr = lambda x: kaiming_uniform_(x, a=math.sqrt(5))
 #initializr = lambda x: xavier_uniform_(x)
 
+from .sign import sign
 from .sparsemax import sparsemax
 
 from .global_attn import build_attention_head, ATTENTION_HEADS_REGISTRY, GlobalAttention

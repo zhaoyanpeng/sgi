@@ -15,7 +15,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 from ..util import numel
-from ..data import MetadataCatalog, mask_tokens
+from ..data import MetadataCatalog, mask_tokens, connect_class2token
 from ..data import build_clevr_dataset as build_dataset
 from ..data import process_clevr_batch as process_batch
 from ..data import build_copy_dataset, process_copy_batch
@@ -89,6 +89,10 @@ class Monitor(Monitor):
             eval(f"build_{self.cfg.data.name}_dataset")(
                 self.cfg.data, not self.cfg.eval, self.echo
             )
+        self.token2class = {}
+        if self.cfg.data.cate_type != "":
+            meta = MetadataCatalog.get(self.cfg.data.name)
+            self.token2class = connect_class2token(self.decoder_vocab, meta)
         """
         meta = MetadataCatalog.get(self.cfg.data.name)
         for epoch_step, batch_data in enumerate(self.dataloader):
@@ -112,14 +116,39 @@ class Monitor(Monitor):
         mlm_prob=self.cfg.data.mlm_prob
         if mlm_prob > 0:
             mlm_inputs, mlm_labels = mask_tokens(
-                sequences, mlm_prob, self.decoder_vocab, 
-                train=self.model.training, target_words=list(self.cfg.data.relation_words)
+                sequences, mlm_prob, self.decoder_vocab, train=self.model.training, #False, #
+                target_words=list(self.cfg.data.relation_words)
             )
+        inter_attn_mask = None
+        if False and len(self.token2class) > 0:
+            if self.cfg.data.cate_type == "atomic_object":
+                B, T = sequences.shape
+                device = sequences.device
+                tokens = sequences[:, 1::2].cpu().tolist()
+                gold_obj_idxes = torch.tensor([
+                    [obj_list.index(self.token2class[token]) for token in token_list]
+                    for token_list, obj_list in zip(tokens, union["obj_classes"])
+                ], device=device)
+                inter_attn_mask = torch.full(obj_idxes.shape, 1, device=device).bool()
+                inter_attn_mask.scatter_(-1, gold_obj_idxes, 0)
+
+                """
+                indice = torch.arange(B, device=device)
+                inter_attn_mask = inter_attn_mask.unsqueeze(1).repeat(1, T, 1)
+                inter_attn_mask[indice, 1, gold_obj_idxes[:, 0]] = True
+                inter_attn_mask[indice, 3, gold_obj_idxes[:, 1]] = True
+                """
+
+            elif "_oro" in self.cfg.data.cate_type:
+                pass
+            elif "_oor" in self.cfg.data.cate_type:
+                pass
         return {
             "obj_idxes": obj_idxes, "obj_boxes": obj_boxes, "obj_names": obj_names, 
             "obj_masks": obj_masks, "sequences": sequences, "img_shape": img_shape,
             "file_name": file_name, "obj_names_src": obj_names_src,
             "mlm_inputs": mlm_inputs, "mlm_labels": mlm_labels,
+            "inter_attn_mask": inter_attn_mask,
         }
 
     def epoch(self, iepoch):
@@ -176,6 +205,10 @@ class Monitor(Monitor):
             self.scheduler is not None:
             self.scheduler.step()
         self.timeit(all_time, show=True)
+
+        self.total_step = self.total_loss = self.total_inst = 0
+        self.start_time = time.time()
+
         return ppl_criteria 
 
     def infer(self, dataloader, samples=float("inf"), iepoch=0):
