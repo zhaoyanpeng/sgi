@@ -24,5 +24,7 @@ qk_scale: null
 activation: gelu
 skip_embed: False
 ln_input: True 
+q_activation: none
+k_activation: none
 sign_q: False
 sign_k: False

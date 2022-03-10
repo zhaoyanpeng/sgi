@@ -67,7 +67,7 @@ class ClevrDataLoader(torch.utils.data.Dataset):
 
             #sorted_annos = sorted(item["annotations"], key=lambda x: x["obj_id"])
             sorted_annos = sorted(item["annotations"], key=lambda x: x["bbox"][0])
-            relations = compute_all_relationships(item, sorted_annos)
+            item["relationships"] = compute_all_relationships(item, sorted_annos)
 
             for anno in sorted_annos:
                 x, y, w, h = anno["bbox"]

@@ -37,6 +37,7 @@ class SGI(nn.Module):
             sequences, memory=objects, memo_key_padding_mask=obj_masks, **kwargs
         )
         loss, outs = self.loss_head(logits, targets)
+        self.set_stats(dec_extra)
         if analyze:
             self.analyze(
                 obj_names=obj_names_src, obj_masks=obj_masks, sequences=sequences, logits=logits,
@@ -57,7 +58,18 @@ class SGI(nn.Module):
             self.loss_head.state_dict(),
         )
 
+    def set_stats(self, dec_extra):
+        attns = dec_extra["attns"]
+        if isinstance(attns, torch.Tensor):
+            meter = self.meter_train if self.training else self.meter_infer
+            meter(signs=attns[0].sum().cpu().item())
+
     def stats(self): 
+        meter = self.meter_train if self.training else self.meter_infer
+        stats = meter.stats
+        if "signs" in stats:
+            n = stats["signs"]
+            return f"SIGNS: {n}"
         return ""
 
     def reset(self):

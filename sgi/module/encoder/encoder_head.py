@@ -141,7 +141,7 @@ class MetaEncHead(nn.Module):
             else:
                 bbox = bbox.clone()
                 bbox[:, :, 1:] = 0. # only x matters for left / right relation
-                bbox = bbox * 10 # might make it easier to learn?
+                #bbox = bbox * 10 # might make it easier to learn?
                 positions = self.position_embed(bbox)
                 #positions = F.relu(positions)
             if self.cat_p:
@@ -186,8 +186,10 @@ class MiniTFEncHead(MetaEncHead):
                 proj_dropout=cfg.proj_dropout,
                 num_head_intra=cfg.num_head_intra,
                 num_head_inter=cfg.num_head_inter,
-                sign_q=cfg.sign_q,
-                sign_k=cfg.sign_k,
+                q_activation=cfg.q_activation,
+                k_activation=cfg.k_activation,
+                sign_q_intra=cfg.sign_q,
+                sign_k_intra=cfg.sign_k,
             )
             self.encoder = MiniTF(layer_fn, cfg.num_layer)
 
@@ -205,6 +207,17 @@ class MiniTFEncHead(MetaEncHead):
     ):
         #bbox = None if True else bbox
         x = self._encode_positions(x, bbox, img_shape)
+
+        """
+        y = x[:, :, 256:260]
+        print(y)
+        b = bbox[:, :, :1]
+        print(b)
+        e = self.position_embed.weight[:4, 0]
+        print(e)
+        f = y / e.unsqueeze(0).unsqueeze(0)
+        print(f)
+        """
 
         if self.encoder is None:
             return x, None, None

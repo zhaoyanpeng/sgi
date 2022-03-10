@@ -4,6 +4,7 @@ w_dim: 512 # word
 m_dim: 512 # model
 f_dim: 1024 # forward
 p_dim: 512 # position
+cat_p: False
 num_p: 64 
 p_type: learned 
 num_layer: 4
@@ -21,5 +22,10 @@ activation: gelu
 skip_embed: False
 ln_input: True 
 max_dec_len: 30  
-sign_q: False
-sign_k: False
+q_activation: none
+k_activation: none
+sign_q_intra: False
+sign_k_intra: False
+sign_q_inter: False
+sign_k_inter: False
+inter_layers: []

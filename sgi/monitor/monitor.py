@@ -135,9 +135,11 @@ class Monitor(Monitor):
                 """
                 indice = torch.arange(B, device=device)
                 inter_attn_mask = inter_attn_mask.unsqueeze(1).repeat(1, T, 1)
-                inter_attn_mask[indice, 1, gold_obj_idxes[:, 0]] = True
-                inter_attn_mask[indice, 3, gold_obj_idxes[:, 1]] = True
+                inter_attn_mask[indice, 1, gold_obj_idxes[:, 1]] = True
+                inter_attn_mask[indice, 3, gold_obj_idxes[:, 0]] = True
                 """
+
+                #print(gold_obj_idxes)
 
             elif "_oro" in self.cfg.data.cate_type:
                 pass
@@ -232,6 +234,7 @@ class Monitor(Monitor):
 
             batch_dict = self.make_batch(batch)
             sequences = batch_dict["sequences"]
+            #batch_dict["infer"] = True
 
             loss_mean, (_, loss_out) = self.model(**batch_dict)
             ntoken, loss_all = loss_out 
