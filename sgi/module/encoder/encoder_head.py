@@ -176,9 +176,10 @@ class MiniTFEncHead(MetaEncHead):
         super().__init__(cfg, token_vocab)
         self.encoder = None
         if cfg.num_layer > 0: 
-            layer_fn = lambda : MiniTFBlock(
+            layer_fn = lambda ilayer: MiniTFBlock(
                 cfg.m_dim, cfg.num_head, cfg.f_dim, cfg.attn_cls_intra,
                 attn_cls_inter=cfg.attn_cls_inter,
+                ilayer=ilayer,
                 dropout=cfg.t_dropout,
                 qk_scale=cfg.qk_scale,
                 activation=cfg.activation,
@@ -190,6 +191,7 @@ class MiniTFEncHead(MetaEncHead):
                 k_activation=cfg.k_activation,
                 sign_q_intra=cfg.sign_q,
                 sign_k_intra=cfg.sign_k,
+                num_pos=cfg.max_enc_len,
             )
             self.encoder = MiniTF(layer_fn, cfg.num_layer)
 

@@ -116,6 +116,7 @@ class MiniTFDecHead(MetaDecHead):
                 num_head_inter=cfg.num_head_inter,
                 q_activation=cfg.q_activation,
                 k_activation=cfg.k_activation,
+                num_pos=cfg.max_dec_len,
                 sign_q_intra=cfg.sign_q_intra,
                 sign_k_intra=cfg.sign_k_intra,
                 sign_q_inter=cfg.sign_q_inter,
@@ -390,7 +391,10 @@ class MiniTFMLMDecHead(MiniTFDecHead):
             )
 
             attn_weights = [
-                [attn[..., i, :] for attn in intra_inter] for intra_inter in attn_weights
+                [
+                    attn[..., i, :] if attn is not None
+                    else torch.tensor([], device=x.device) for attn in intra_inter
+                ] for intra_inter in attn_weights
             ]
             attn_outs.append(attn_weights)
             dec_outs.append(x[:, i])
@@ -410,6 +414,7 @@ class MiniTFMLMDecHead(MiniTFDecHead):
         mlm_labels[special_token_masks] = -100
         return x, mlm_labels, {"attns": attn_weights}
 
+
 @DECODER_HEADS_REGISTRY.register()
 class ToyTFMLMDecHead(MetaDecHead):
     def __init__(self, cfg, token_vocab):
@@ -425,7 +430,7 @@ class ToyTFMLMDecHead(MetaDecHead):
         elif self.case in {4}:
             self.encoder = None
             if cfg.num_layer > 0:
-                layer_fn = lambda ilayer: SignTFBlock(
+                layer_fn = lambda ilayer: MiniTFBlock(
                     cfg.m_dim, cfg.num_head, cfg.f_dim, cfg.attn_cls_intra,
                     attn_cls_inter=cfg.attn_cls_inter,
                     ilayer=ilayer,
@@ -467,7 +472,7 @@ class ToyTFMLMDecHead(MetaDecHead):
     ):
         if memory is None: # may or may not have inter attention
             memory = memo_attn_mask = memo_key_padding_mask = None
-        if infer and not self.training:
+        if infer and not self.training and self.case == 4:
             return self.inference(
                 x,
                 memory=memory,
@@ -589,8 +594,8 @@ class ToyTFMLMDecHead(MetaDecHead):
             if self.encoder is None:
                 return self.predictor(x), mlm_labels, {}
 
-            self_key_padding_mask = torch.full(i_seqs.shape, 1, device=i_seqs.device).bool()
-            self_key_padding_mask[:, [1, 2, 3]] = False
+            #self_key_padding_mask = torch.full(i_seqs.shape, 1, device=i_seqs.device).bool()
+            #self_key_padding_mask[:, [1, 2, 3]] = False
 
             x, attn_weights = self.encoder(
                 x,
@@ -602,8 +607,8 @@ class ToyTFMLMDecHead(MetaDecHead):
                 require_attn_weight=True
             )
 
-            sign_weight = attn_weights[-1][1].squeeze() # inter attn
-            attn_weights = sign_weight = sign_weight[..., 2, [1, 3]]
+            #sign_weight = attn_weights[-1][1].squeeze() # inter attn
+            #attn_weights = sign_weight = sign_weight[..., 2, [1, 3]]
             #x = x[:, 2:3]
             #mlm_labels = mlm_labels[:, 2:3]
             #print(mlm_labels)
@@ -630,4 +635,83 @@ class ToyTFMLMDecHead(MetaDecHead):
 
         #print(x[:, :, 256:260])
         x = self.predictor(x)
+        return x, mlm_labels, {"attns": attn_weights}
+
+    def inference(
+        self,
+        x: Tensor,
+        memory: Tensor = None,
+        memo_attn_mask: Tensor = None,
+        memo_key_padding_mask: Tensor = None,
+        mlm_inputs: Tensor=None,
+        mlm_labels: Tensor=None,
+        inter_attn_mask: Tensor=None,
+        **kwargs,
+    ):
+        device = x.device
+        B, L = x.shape[:2]
+
+        #batch_indice = torch.arange(B, device=device)
+        self_key_padding_mask = (x == self.token_vocab.PAD_IDX)
+        special_token_masks = self.token_vocab.get_special_token_masks(x)
+
+        self_key_padding_mask = torch.full(x.shape, 1, device=x.device).bool()
+        self_key_padding_mask[:, [1, 2, 3]] = False
+
+        dec_outs = list()
+        attn_outs = list()
+        x_clone = x.clone()
+
+        if inter_attn_mask is not None: # hard attention provided externally
+            if inter_attn_mask.dim() == 2: # (B, S)
+                memo_key_padding_mask = inter_attn_mask | memo_key_padding_mask
+            elif inter_attn_mask.dim() == 3: # (B, T, S)
+                assert memo_attn_mask is None
+                memo_attn_mask = inter_attn_mask
+
+        for i in range(L):
+            mlm_inputs = x_clone.clone()
+            #mlm_labels = x_clone.clone()
+            #mlm_labels[:, :i] = -100
+            #mlm_labels[:, i + 1:] = -100
+
+            #mlm_labels[:, i] = mlm_inputs[:, i]
+            #mlm_labels[special_token_masks] = -100
+
+            mlm_inputs[:, i] = self.token_vocab("<mask>")
+            mlm_inputs[self_key_padding_mask] = self.token_vocab.PAD_IDX
+
+            i_seqs = mlm_inputs
+
+            x = self._encode_positions(i_seqs)
+
+            x, attn_weights = self.encoder(
+                x,
+                memory=memory,
+                self_attn_mask=None,
+                memo_attn_mask=memo_attn_mask,
+                self_key_padding_mask=self_key_padding_mask,
+                memo_key_padding_mask=memo_key_padding_mask,
+                require_attn_weight=True
+            )
+
+            attn_weights = [
+                [attn[..., i, :] for attn in intra_inter] for intra_inter in attn_weights
+            ]
+            attn_outs.append(attn_weights)
+            dec_outs.append(x[:, i])
+
+        nstep, nlayer, nattn = len(attn_outs), len(attn_outs[0]), len(attn_outs[0][0])
+        attn_weights = [
+            [
+                torch.stack([
+                    attn_outs[k][l][j] for k in range(nstep)
+                ], -2) for j in range(nattn)
+            ] for l in range(nlayer)
+        ]
+        x = torch.stack(dec_outs, -2)
+
+        x = self.predictor(x)
+        mlm_labels = x_clone.clone()
+        mlm_labels[special_token_masks] = -100
         return x, mlm_labels, {"attns": attn_weights}

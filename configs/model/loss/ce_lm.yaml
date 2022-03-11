@@ -1,6 +1,7 @@
 name: 'LMLossHead'
 layers: []
 scaling: True
+alpha_l1: 0.
 max_len_dec: 20
 kl_warmup_steps: 0
 

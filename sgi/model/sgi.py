@@ -36,8 +36,8 @@ class SGI(nn.Module):
         logits, targets, dec_extra = self.decoder_head(
             sequences, memory=objects, memo_key_padding_mask=obj_masks, **kwargs
         )
-        loss, outs = self.loss_head(logits, targets)
-        self.set_stats(dec_extra)
+        _, outs = self.loss_head(logits, targets, dec_extra=dec_extra)
+        loss = self.set_stats(dec_extra, outs[-1])
         if analyze:
             self.analyze(
                 obj_names=obj_names_src, obj_masks=obj_masks, sequences=sequences, logits=logits,
@@ -58,19 +58,34 @@ class SGI(nn.Module):
             self.loss_head.state_dict(),
         )
 
-    def set_stats(self, dec_extra):
-        attns = dec_extra["attns"]
-        if isinstance(attns, torch.Tensor):
-            meter = self.meter_train if self.training else self.meter_infer
-            meter(signs=attns[0].sum().cpu().item())
+    def set_stats(self, dec_extra, loss_dict):
+        attn_weights = dec_extra["attns"]
+        meter = self.meter_train if self.training else self.meter_infer
+        if isinstance(attn_weights, torch.Tensor):
+            meter(signs=attn_weights[0].sum().cpu().item()) # one sample
+        elif isinstance(attn_weights, (tuple, list)):
+            attn_weights = attn_weights[-1][1] # last-layer's inter attns
+            sign_weights = attn_weights[:, :, 2] # (B, nHead, S): relation word
+
+            meter(signs=sign_weights.norm(p=1, dim=-1).mean().cpu().item()) # one sample
+            meter(mean_signs=attn_weights[:, :, [1, 2, 3], :].norm(p=1, dim=-1).mean().cpu().item()) #abs().sum(-1).mean().cpu().item())
+
+        meter(**loss_dict)
+        loss = sum([v for k, v in loss_dict.items() if k.endswith("_loss")])
+        loss = loss_dict["main_loss"] #+ loss_dict["l1_norm_loss"]
+        return loss
 
     def stats(self): 
         meter = self.meter_train if self.training else self.meter_infer
         stats = meter.stats
+        info = ""
         if "signs" in stats:
             n = stats["signs"]
-            return f"SIGNS: {n}"
-        return ""
+            info += f"SIGNS: {n:.4f} "
+        if "mean_signs" in stats:
+            n = stats["mean_signs"]
+            info += f"mSIGNS: {n:.4f} "
+        return info
 
     def reset(self):
         meter = self.meter_train if self.training else self.meter_infer

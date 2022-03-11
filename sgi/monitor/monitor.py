@@ -117,7 +117,7 @@ class Monitor(Monitor):
         if mlm_prob > 0:
             mlm_inputs, mlm_labels = mask_tokens(
                 sequences, mlm_prob, self.decoder_vocab, train=self.model.training, #False, #
-                target_words=list(self.cfg.data.relation_words)
+                target_words=list(self.cfg.data.relation_words), at_least_one=True,
             )
         inter_attn_mask = None
         if False and len(self.token2class) > 0:
@@ -234,7 +234,8 @@ class Monitor(Monitor):
 
             batch_dict = self.make_batch(batch)
             sequences = batch_dict["sequences"]
-            #batch_dict["infer"] = True
+
+            batch_dict["infer"] = True
 
             loss_mean, (_, loss_out) = self.model(**batch_dict)
             ntoken, loss_all = loss_out 
@@ -291,9 +292,10 @@ class Monitor(Monitor):
             batch_dict = self.make_batch(batch)
             sequences = batch_dict["sequences"]
 
+            batch_dict["infer"] = True
             batch_dict["analyze"] = True
 
-            _, (_, loss_out) = self.model(**batch_dict)
+            loss_mean, (_, loss_out) = self.model(**batch_dict)
             ntoken, loss_all = loss_out
             loss = loss_all.sum() if isinstance(loss_all, Tensor) else loss_mean * ntoken
 

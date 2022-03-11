@@ -63,6 +63,7 @@ class LMLossHead(LossHead):
             word: self.token_vocab(word) for word in relation_words
         }
         self.accuracies = {word: [0] * 2 for word in relation_words + ["overall"]}
+        self.alpha_l1 = cfg.alpha_l1
         self.reduce = False 
 
     def select(self, logit, target):
@@ -127,13 +128,32 @@ class LMLossHead(LossHead):
                 metric[1] += mask.sum()
         return results 
 
+    def regularize_attn(self, x1, x2, dec_extra=None, **kwargs):
+        attn_weights = dec_extra["attns"]
+        if not isinstance(attn_weights, (tuple, list)) or self.alpha_l1 <= 0.:
+            return torch.tensor(0., device=x1.device)
+
+        mask = (x2 != self.ignore_index).unsqueeze(1) # (B, nHead, T)
+
+        tanhs = last_layer_inter_attn = attn_weights[-1][1]
+        attn_norms = tanhs.norm(p=1, dim=-1) # (B, nHead, T, S)
+        attn_norms = attn_norms.masked_select(mask)
+
+        l1_norm = attn_norms.mean() * self.alpha_l1
+        return l1_norm
+
     def forward(self, x1, x2, *args, **kwargs):
+        l1_norm = self.regularize_attn(x1, x2, **kwargs)
         if not self.training:
-            return self.infer(x1, x2, *args, **kwargs)
+            loss, (ntoken, losses) = self.infer(x1, x2, *args, **kwargs)
+            extra = {"ntoken": ntoken, "main_loss": loss, "l1_norm_loss": l1_norm}
+            return loss, (ntoken, extra)
         logits = self.logit_scale.exp() * x1
         if self.optim_only_relation and self.training:
             logits, x2 = self.select(logits, x2)
-        return self._estimate_loss(logits, x2)
+        loss, (ntoken, losses) = self._estimate_loss(logits, x2)
+        extra = {"ntoken": ntoken, "main_loss": loss, "l1_norm_loss": l1_norm}
+        return loss, (ntoken, extra)
 
 @LOSS_HEADS_REGISTRY.register()
 class MLMLossHead(LMLossHead):

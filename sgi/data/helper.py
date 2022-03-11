@@ -159,7 +159,7 @@ def register_indexer(name, index_file, extra_keys=[]):
         warnings.warn(f"{e}")
 
 def mask_tokens(
-    sequences, mlm_prob, vocab, train=False, target_words=[], special_token_masks=None
+    sequences, mlm_prob, vocab, train=False, target_words=[], special_token_masks=None, at_least_one=False
 ):
     inputs = sequences.clone()
     labels = sequences.clone()
@@ -177,6 +177,19 @@ def mask_tokens(
         )
         inputs[target_masks] = vocab("<mask>")
         labels[~target_masks] = -100 
+        return inputs, labels
+
+    if at_least_one:
+        B = inputs.shape[0]
+        weights = torch.tensor([1, 1, 1], dtype=torch.float, device=device)
+        indice = torch.multinomial(weights, B, replacement=True).unsqueeze(1)
+
+        mask = torch.full(sequences.shape, 0, device=device).bool()
+        mask = mask & special_token_masks
+        mask.scatter_(1, indice + 1, True)
+
+        inputs[mask] = vocab("<mask>")
+        labels[~mask] = -100
         return inputs, labels
 
     prob_matrix = torch.full(sequences.shape, mlm_prob, device=device)

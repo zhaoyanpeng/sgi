@@ -9,6 +9,7 @@ __all__ = [
     "MiniTF", 
     "MiniTFBlock",
     "SignTFBlock",
+    "SortTFAttention",
     "MiniTFAttention",
     "SignTFAttention",
     "FakeTFAttention",
@@ -466,7 +467,7 @@ class SignTFAttention(MiniTFAttention):
         sk = self.k_activation(sk)
 
         sign_weight = sq @ sk.transpose(-1, -2) # (B, N, T, S)
-        sign_weight = sign_weight.tanh() # or nn.Softsign()
+        sign_weight = sign_weight.tanh() # nn.Softsign()(sign_weight) #
 
         if attn_mask is not None:
             if attn_mask.dim() == 3: # (B, T, S) instance-specific
@@ -523,6 +524,111 @@ class SignTFAttention(MiniTFAttention):
         )
         return F.linear(x, weight, bias)
 
+class SortTFAttention(SignTFAttention):
+    def __init__(
+        self,
+        D: int,
+        N: int,
+        kdim: int = None,
+        vdim: int = None,
+        bias: bool = True,
+        qk_scale: float = None,
+        attn_dropout: float = .0,
+        proj_dropout: float = .0,
+        q_activation: str = "none",
+        k_activation: str = "none",
+        sign_q: bool = False,
+        sign_k: bool = False,
+        num_pos: int = 10,
+        **kwargs,
+    ):
+        super().__init__(
+            D, N,
+            kdim=kdim,
+            vdim=vdim,
+            bias=bias,
+            qk_scale=qk_scale,
+            attn_dropout=attn_dropout,
+            proj_dropout=proj_dropout,
+            q_activation=q_activation,
+            k_activation=k_activation,
+            sign_q=sign_q,
+            sign_k=sign_k,
+        )
+        # may need to interpolate pos for longer sequences
+        self.proj_pos = nn.Parameter(Tensor(num_pos, self.D, self.D))
+        nn.init.xavier_uniform_(self.proj_pos)
+
+    def forward(
+        self,
+        q: Tensor,
+        k: Tensor,
+        v: Tensor,
+        attn_mask: Tensor = None,
+        key_padding_mask: Tensor = None,
+        **kwargs
+    ):
+        old_q, old_k, old_v = q, k, v
+        if q.data_ptr() == k.data_ptr() == v.data_ptr():
+            k, v, q = self._proj_qkv(q)
+
+            # currently only works for intra attention
+            # it does not make sense to use it in inter attention
+
+            B, L, D = v.shape[:3]
+            new_p = self.proj_pos[:L]
+            pv = old_v.unsqueeze(-2) @ new_p.unsqueeze(0) # (B, L, D)
+            pv = pv.squeeze(-2)
+
+            v = pv # + v
+
+        elif k.data_ptr() == v.data_ptr():
+            k, v = self._proj_kv(k)
+            q = self._proj_q(q)
+        else:
+            q = self._proj_q(q)
+            k = self._proj_k(k)
+            v = self._proj_v(v)
+
+        B, T, S = q.shape[0], q.shape[1], k.shape[1]
+
+        # (B, L, D) -> (B, L, N, H) -> (B, N, L, H)
+        q = q.contiguous().reshape(B, T, self.N, self.H).permute(0, 2, 1, 3)
+        k = k.contiguous().reshape(B, S, self.N, self.H).permute(0, 2, 1, 3)
+        v = v.contiguous().reshape(B, S, self.N, self.H).permute(0, 2, 1, 3)
+
+        attn_weight = (q @ k.transpose(-1, -2)) * self.qk_scale # (B, N, T, S)
+
+        if attn_mask is not None:
+            if attn_mask.dim() == 3: # (B, T, S) instance-specific
+                attn_mask = attn_mask.unsqueeze(1)
+            elif attn_mask.dim() == 2: #  (T, S) shared within the batch
+                attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)
+            attn_weight.masked_fill_(attn_mask, float('-inf'))
+
+        if key_padding_mask is not None: # (B, T) instance-specific
+            attn_mask = key_padding_mask.unsqueeze(1).unsqueeze(2)
+            attn_weight.masked_fill_(attn_mask, float('-inf'))
+
+
+        """
+        #masking out `self' could result in faster convergence but is not necessary
+        self_mask = torch.full((T, S), 0, device=q.device).bool()
+        indice = torch.arange(T, device=q.device)
+        self_mask[indice, indice] = True
+
+        self_mask = self_mask.unsqueeze(0).unsqueeze(1)
+        attn_weight.masked_fill_(self_mask, float("-inf"))
+        """
+
+        attn_weight = self.attn_dp(attn_weight.softmax(dim=-1))
+        x = (attn_weight @ v).transpose(1, 2).reshape(B, T, self.D)
+        x = self.proj_dp(self.proj(x))
+        return x, attn_weight
+
+
+
+
 class SignTFBlock(MetaModule):
     """ Encoder or decoder, it is your choice.
     """
@@ -545,20 +651,20 @@ class SignTFBlock(MetaModule):
         sign_q_inter: bool = False,
         sign_k_inter: bool = False,
         inter_layers: list = [],
-        ln_output: bool = True,
         **kwargs,
     ):
         super().__init__()
+        ln_output = True
         self.intra_attn = eval(attn_cls_intra)(
             D, num_head_intra or N, attn_dropout=attn_dropout, proj_dropout=proj_dropout,
             sign_q=sign_q_intra, sign_k=sign_k_intra, q_activation=q_activation, k_activation=k_activation, **kwargs
         )
-        self.intra_attn_ln = nn.LayerNorm(D)
+        self.intra_attn_ln = nn.LayerNorm(D) if ln_output else nn.Identity()
         self.intra_attn_dp = nn.Dropout(dropout)
 
         self.ff = nn.Sequential(
             nn.Linear(D, F),
-            _get_activation_fn.get(activation, nn.GELU),
+            _get_activation_fn.get(activation, nn.GELU()),
             nn.Dropout(dropout),
             nn.Linear(F, D),
         )
