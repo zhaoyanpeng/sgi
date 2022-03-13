@@ -179,6 +179,7 @@ def mask_tokens(
         labels[~target_masks] = -100 
         return inputs, labels
 
+    """
     if at_least_one:
         B = inputs.shape[0]
         weights = torch.tensor([1, 1, 1], dtype=torch.float, device=device)
@@ -191,10 +192,20 @@ def mask_tokens(
         inputs[mask] = vocab("<mask>")
         labels[~mask] = -100
         return inputs, labels
+    """
 
     prob_matrix = torch.full(sequences.shape, mlm_prob, device=device)
     prob_matrix.masked_fill_(special_token_masks, value=0.)
     all_masked_indice = torch.bernoulli(prob_matrix).bool()
+
+    if at_least_one: # ... mask
+        B, L = sequences.shape[:2]
+        weights = torch.tensor([1] * (L - 2), dtype=torch.float, device=device)
+        indice = torch.multinomial(weights, B, replacement=True).unsqueeze(1) + 1
+        for b, idx in enumerate(indice):
+            if all_masked_indice[b][1 : L - 1].sum() == 0.:
+                all_masked_indice[b][idx] = True
+
     labels[~all_masked_indice] = -100 # ignore losses from unmasked tokens 
     
     indice_masked_prob = 1.0 #0.8

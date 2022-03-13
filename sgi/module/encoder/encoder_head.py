@@ -236,10 +236,12 @@ class TorchTFEncHead(MetaEncHead):
     """
     def __init__(self, cfg, token_vocab, **kwargs):
         super().__init__(cfg, token_vocab)
-        layer_fn = TransformerEncoderLayer(
-            cfg.m_dim, cfg.num_head, cfg.f_dim, cfg.t_dropout, activation=cfg.activation,
-        )
-        self.encoder = TransformerEncoder(layer_fn, cfg.num_layer) 
+        self.encoder = None
+        if cfg.num_layer > 0:
+            layer_fn = TransformerEncoderLayer(
+                cfg.m_dim, cfg.num_head, cfg.f_dim, cfg.t_dropout, activation=cfg.activation,
+            )
+            self.encoder = TransformerEncoder(layer_fn, cfg.num_layer)
 
         self._reset_parameters()
 
@@ -254,6 +256,9 @@ class TorchTFEncHead(MetaEncHead):
         **kwargs
     ):
         x = self._encode_positions(x, bbox, img_shape)
+
+        if self.encoder is None:
+            return x, None, None
         
         x = x.transpose(0, 1)
 

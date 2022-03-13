@@ -90,7 +90,7 @@ class Monitor(Monitor):
                 self.cfg.data, not self.cfg.eval, self.echo
             )
         self.token2class = {}
-        if self.cfg.data.cate_type != "":
+        if self.cfg.data.cate_type in {"atomic_object"}:
             meta = MetadataCatalog.get(self.cfg.data.name)
             self.token2class = connect_class2token(self.decoder_vocab, meta)
         """
@@ -114,10 +114,11 @@ class Monitor(Monitor):
 
         mlm_inputs = mlm_labels = None
         mlm_prob=self.cfg.data.mlm_prob
+        at_least_one = self.cfg.data.cate_type != "" # TODO
         if mlm_prob > 0:
             mlm_inputs, mlm_labels = mask_tokens(
                 sequences, mlm_prob, self.decoder_vocab, train=self.model.training, #False, #
-                target_words=list(self.cfg.data.relation_words), at_least_one=True,
+                target_words=list(self.cfg.data.relation_words), at_least_one=at_least_one,
             )
         inter_attn_mask = None
         if False and len(self.token2class) > 0:

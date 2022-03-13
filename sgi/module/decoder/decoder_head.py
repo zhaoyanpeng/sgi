@@ -221,10 +221,14 @@ class MiniTFDecHead(MetaDecHead):
 class TorchTFDecHead(MetaDecHead):
     def __init__(self, cfg, token_vocab):
         super().__init__(cfg, token_vocab)
-        layer_fn = TransformerDecoderLayer(
-            cfg.m_dim, cfg.num_head, cfg.f_dim, cfg.t_dropout, activation=cfg.activation, 
-        ) 
-        self.encoder = TransformerDecoder(layer_fn, cfg.num_layer) 
+        self.encoder = None
+        if cfg.num_layer > 0:
+            layer_fn = TransformerDecoderLayer(
+                cfg.m_dim, cfg.num_head, cfg.f_dim, cfg.t_dropout, activation=cfg.activation,
+            )
+            self.encoder = TransformerDecoder(layer_fn, cfg.num_layer)
+
+        self.num_head = cfg.num_head
 
         self.predictor = nn.Sequential(
             nn.Linear(cfg.m_dim, len(self.token_vocab))
@@ -269,7 +273,7 @@ class TorchTFDecHead(MetaDecHead):
         x = self.encoder(
             x, 
             memory=memory, 
-            tgt_mask=self_attn_mask.squeeze(0),
+            tgt_mask=self_attn_mask,
             tgt_key_padding_mask=self_key_padding_mask,
             memory_key_padding_mask=memo_key_padding_mask,
         ) 
@@ -278,6 +282,141 @@ class TorchTFDecHead(MetaDecHead):
 
         x = self.predictor(x) 
         return x, o_seqs.contiguous(), {}
+
+@DECODER_HEADS_REGISTRY.register()
+class TorchTFMLMDecHead(TorchTFDecHead):
+    def forward(
+        self,
+        x: Tensor,
+        memory: Tensor=None,
+        memo_attn_mask: Tensor=None,
+        memo_key_padding_mask: Tensor=None,
+        mlm_inputs: Tensor=None,
+        mlm_labels: Tensor=None,
+        inter_attn_mask: Tensor=None,
+        infer: bool=False,
+        **kwargs,
+    ):
+        if memory is None: # may or may not have inter attention
+            memory = memo_attn_mask = memo_key_padding_mask = None
+        if infer and not self.training:
+            return self.inference(
+                x,
+                memory=memory,
+                memo_attn_mask=memo_attn_mask,
+                memo_key_padding_mask=memo_key_padding_mask,
+                mlm_inputs=mlm_inputs,
+                mlm_labels=mlm_labels,
+                inter_attn_mask=inter_attn_mask,
+                **kwargs,
+            )
+
+        i_seqs = mlm_inputs
+
+        x = self._encode_positions(i_seqs)
+
+        if self.encoder is None:
+            return self.predictor(x), mlm_labels, {}
+
+
+        self_key_padding_mask = (i_seqs == self.token_vocab.PAD_IDX)
+
+        if inter_attn_mask is not None: # hard attention provided externally
+            if inter_attn_mask.dim() == 2: # (B, S)
+                memo_key_padding_mask = inter_attn_mask | memo_key_padding_mask
+            elif inter_attn_mask.dim() == 3: # (B, T, S)
+                assert memo_attn_mask is None
+                B, T, S = inter_attn_mask.shape[:3]
+                memo_attn_mask = inter_attn_mask.unsqueeze(1).expand(-1, self.num_head, -1, -1).reshape(-1, T, S)
+
+
+        memory = memory.transpose(0, 1)
+
+        x = x.transpose(0, 1)
+        
+        x = self.encoder(
+            x,
+            memory=memory,
+            tgt_mask=None,
+            memory_mask=memo_attn_mask,
+            tgt_key_padding_mask=self_key_padding_mask,
+            memory_key_padding_mask=memo_key_padding_mask,
+        )
+
+        x = x.transpose(0, 1)
+
+        x = self.predictor(x)
+        return x, mlm_labels, {"attns": None}
+
+    def inference(
+        self,
+        x: Tensor,
+        memory: Tensor = None,
+        memo_attn_mask: Tensor = None,
+        memo_key_padding_mask: Tensor = None,
+        mlm_inputs: Tensor=None,
+        mlm_labels: Tensor=None,
+        inter_attn_mask: Tensor=None,
+        **kwargs,
+    ):
+        device = x.device
+        B, L = x.shape[:2]
+
+        #batch_indice = torch.arange(B, device=device)
+        self_key_padding_mask = (x == self.token_vocab.PAD_IDX)
+        special_token_masks = self.token_vocab.get_special_token_masks(x)
+
+        dec_outs = list()
+        attn_outs = list()
+        x_clone = x.clone()
+
+        if inter_attn_mask is not None: # hard attention provided externally
+            if inter_attn_mask.dim() == 2: # (B, S)
+                memo_key_padding_mask = inter_attn_mask | memo_key_padding_mask
+            elif inter_attn_mask.dim() == 3: # (B, T, S)
+                assert memo_attn_mask is None
+                B, T, S = inter_attn_mask.shape[:3]
+                memo_attn_mask = inter_attn_mask.unsqueeze(1).expand(-1, self.num_head, -1, -1).reshape(-1, T, S)
+
+        memory = memory.transpose(0, 1)
+
+        for i in range(L):
+            mlm_inputs = x_clone.clone()
+            #mlm_labels = x_clone.clone()
+            #mlm_labels[:, :i] = -100
+            #mlm_labels[:, i + 1:] = -100
+
+            #mlm_labels[:, i] = mlm_inputs[:, i]
+            #mlm_labels[special_token_masks] = -100
+
+            mlm_inputs[:, i] = self.token_vocab("<mask>")
+            #mlm_inputs[self_key_padding_mask] = self.token_vocab.PAD_IDX
+
+            i_seqs = mlm_inputs
+
+            x = self._encode_positions(i_seqs)
+
+            x = x.transpose(0, 1)
+
+            x = self.encoder(
+                x,
+                memory=memory,
+                tgt_mask=None,
+                memory_mask=memo_attn_mask,
+                tgt_key_padding_mask=self_key_padding_mask,
+                memory_key_padding_mask=memo_key_padding_mask,
+            )
+
+            x = x.transpose(0, 1)
+
+            dec_outs.append(x[:, i])
+
+        x = torch.stack(dec_outs, -2)
+
+        x = self.predictor(x)
+        mlm_labels = x_clone.clone()
+        mlm_labels[special_token_masks] = -100
+        return x, mlm_labels, {"attns": None}
 
 @DECODER_HEADS_REGISTRY.register()
 class MiniTFMLMDecHead(MiniTFDecHead):
@@ -374,7 +513,7 @@ class MiniTFMLMDecHead(MiniTFDecHead):
             #mlm_labels[special_token_masks] = -100
 
             mlm_inputs[:, i] = self.token_vocab("<mask>")
-            mlm_inputs[self_key_padding_mask] = self.token_vocab.PAD_IDX
+            #mlm_inputs[self_key_padding_mask] = self.token_vocab.PAD_IDX
 
             i_seqs = mlm_inputs
 

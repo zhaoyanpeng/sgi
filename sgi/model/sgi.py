@@ -125,7 +125,7 @@ class SGI(nn.Module):
             self.decoder_head = build_decoder_head(local_cfg.model.decoder, decoder_vocab)
             self.decoder_head.load_state_dict(decoder_head_sd)
 
-            self.loss_head = build_loss_head(self.cfg.model.loss, decoder_vocab)
+            self.loss_head = build_loss_head(local_cfg.model.loss, decoder_vocab)
             self.loss_head.load_state_dict(loss_head_sd)
         else:
             self.relation_head = build_encoder_head(self.cfg.model.relation, encoder_vocab)

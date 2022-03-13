@@ -156,10 +156,13 @@ class ClevrDataLoader(torch.utils.data.Dataset):
             #print("\n".join([" ".join(x) for x in final]))
             return final
 
+        max_len = -1
+
         self.dataset = []
         with open(data_file, "r") as fr:
             for line in fr:
                 item = json.loads(line)
+                #max_len = max(max_len, max([len(x) for x in item["captions"]]))
                 captions = filter_captions(item["captions"])
                 if len(captions) == 0:
                     continue
