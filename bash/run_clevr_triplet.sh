@@ -36,17 +36,18 @@ eval_name="CLEVR_val_captions.one_hop.json"
 # bash bash/run_clevr_base.sh default 0
 
 # train: clevr 
-model_name="sgi.map.case5.fake.learned.pad.case2.e2.2-4-4.mini.dense"
-model_name="sgi.map.case5.fake.learned.pad.case2.2-4-4.test"
-model_name="sgi.sort.learned.wd8.d4-4.1101"
+model_name="sgi.sort.learned.wd8.d4-4.mini.e2.11"
+model_name="sgi.sort.learned.wd8.d4-4.mini.e2.11.nogold"
+model_name="sgi.cap.learned.wd8.d4-4.mini.11.nogold.1000"
+model_name="sgi.sort.learned.wd8.d4-4.test"
 mtask="alias_name=$model_name
 verbose=True optimizer.warmup=False optimizer.weight_decay=1e-8
 data.enc_vocab_name=$enc_vocab_name data.dec_vocab_name=$dec_vocab_name
 
-data.cate_type=atomic_object
+data.cate_type=\"\"
 data.cate_max_len=1
 
-data.mlm_prob=0.1
+data.mlm_prob=0.15
 data.relation_words=[left,right]
 model.loss.alpha_l1=0.
 model.loss.name=MLMLossHead
@@ -59,33 +60,36 @@ optimizer.lr=5e-5 optimizer.scheduler=[MultiStepLR,{milestones:[15,36,45,50],gam
 model.encoder.activation=gelu model.encoder.ln_input=False
 model.decoder.activation=gelu model.decoder.ln_input=False
 model.encoder.num_layer=0 model.encoder.num_head=4 model.encoder.t_dropout=0.0 model.encoder.p_dropout=0.0
-model.decoder.num_layer=4 model.decoder.num_head=1 model.decoder.t_dropout=0.0 model.decoder.p_dropout=0.0 model.decoder.attn_dropout=0.0
+model.decoder.num_layer=2 model.decoder.num_head=1 model.decoder.t_dropout=0.0 model.decoder.p_dropout=0.0 model.decoder.attn_dropout=0.0
 
 model.encoder.sign_q=True
 model.encoder.sign_k=False
-model.encoder.attn_cls_intra=SignTFAttention
+model.encoder.attn_cls_intra=MiniTFAttention
 
 model.decoder.sign_q_intra=False
 model.decoder.sign_k_intra=False
 model.decoder.sign_q_inter=True
 model.decoder.sign_k_inter=False
-model.decoder.attn_cls_inter=SignTFAttention
-model.decoder.attn_cls_intra=SortTFAttention
+model.decoder.attn_cls_inter=MiniTFAttention
+model.decoder.attn_cls_intra=MiniTFAttention
 
 model.decoder.q_activation=gelu
 model.decoder.k_activation=gelu
 
 model.decoder.num_head_intra=4
 model.decoder.num_head_inter=4
-model.decoder.inter_layers=[1,1,0,1]
+model.decoder.inter_layers=[1,1]
 
-running.epochs=100 running.batch_size=50 running.peep_rate=100
+running.epochs=1000 running.batch_size=50 running.peep_rate=100
 running.save_rate=1e9 running.save_epoch=True running.skip_save=True running.save_last=True
 
 data.eval_name=$eval_name data.eval_samples=1e6
 "
 
+echo "exit..."
+exit 0
 
+#data.cate_type=atomic_object
 #running.epochs=1 running.batch_size=3 running.peep_rate=1 running.save_rate=1e9 running.save_epoch=True running.save_last=False
 
 #model.decoder.num_p=512 model.decoder.cat_p=True model.decoder.p_dim=256 model.decoder.w_dim=256 model.decoder.p_type=sinuous 

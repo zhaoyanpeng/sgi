@@ -21,4 +21,5 @@ cate_type: "" # how to concatenate attribute words as a caption
 cate_max_len: 40 # max length of the captions generated from `cate_type'
 dummy_pos_type: "" # all (0, 0, w, h); min (0, 0, 0, 0); max (w, h, w, h); mid (w/2, h/2, w/2, h/2) 
 relation_words: [left, right, front, behind]
+input_cap_type: captions # real captions (captions) / full captions (full_caps)
 mlm_prob: -0.

@@ -7,4 +7,5 @@ kl_warmup_steps: 0
 
 add_dummy: ${data.add_dummy}
 cate_type: ${data.cate_type} 
+relation_words: ${data.relation_words}
 optim_only_relation: True

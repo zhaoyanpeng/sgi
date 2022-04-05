@@ -58,7 +58,7 @@ class LMLossHead(LossHead):
         self.add_dummy = cfg.add_dummy
         self.cate_type = cfg.cate_type
         self.optim_only_relation = cfg.optim_only_relation 
-        relation_words = ["left", "right", "front", "behind"]
+        relation_words = list(cfg.relation_words) #["left", "right", "front", "behind"]
         self.relation_words = {
             word: self.token_vocab(word) for word in relation_words
         }

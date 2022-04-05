@@ -57,6 +57,7 @@ class ClevrDataLoader(torch.utils.data.Dataset):
         dum_idx = cate_vocab(self.DUM) if cate_vocab is not None else None
         cate_type = cate_vocab.name if cate_vocab is not None else None
         self.caption_key = "caption" if self.cate_vocab is None else "new_caption" 
+        self.input_cap_type = cfg.input_cap_type
         self.cate_max_len = cfg.cate_max_len
 
         def process_fields(item):
@@ -142,18 +143,27 @@ class ClevrDataLoader(torch.utils.data.Dataset):
                     rels.insert(0, 0)
                 rel_list.insert(0, list(range(1, nobj + 1)))
 
-        def filter_captions(captions):
+        def filter_captions(captions, full_caps=None):
             relations = list(cfg.relation_words)
             if cate_type is not None or len(relations) == 0:
                 return captions
             #print("\n".join([" ".join(x) for x in captions]))
             final = list()
+            masks = list()
             for caption in captions:
+                getitin = False
                 for relation in relations:
                     if relation in caption:
                         final.append(caption)
+                        getitin = True
                         break
+                masks.append(getitin)
+            full = list()
+            if full_caps is not None:
+                assert len(full_caps) == len(captions), f"Captions mush be paired for shared masks"
+                full = [full_caps[i] for i, getitin in enumerate(masks) if getitin]
             #print("\n".join([" ".join(x) for x in final]))
+            final = final if self.input_cap_type == "captions" else full
             return final
 
         max_len = -1
@@ -162,10 +172,11 @@ class ClevrDataLoader(torch.utils.data.Dataset):
         with open(data_file, "r") as fr:
             for line in fr:
                 item = json.loads(line)
-                #max_len = max(max_len, max([len(x) for x in item["captions"]]))
-                captions = filter_captions(item["captions"])
+                full_caps = item.get("full_caps", None)
+                captions = filter_captions(item["captions"], full_caps)
                 if len(captions) == 0:
                     continue
+                #max_len = max(max_len, max([len(x) for x in captions]))
                 if cfg.add_dummy:
                     manipulate_relations(item)
                 new_item = {

@@ -18,6 +18,7 @@ ATTENTION_HEADS_REGISTRY.register(VariationalAttention)
 # embedders
 from .embedder import *
 from .mini_tf import *
+from .special_tf import *
 from .rnn import *
 # optimizer
 from .lars import * 

@@ -127,7 +127,7 @@ class MiniTFDecHead(MetaDecHead):
 
         self.predictor = nn.Sequential(
             nn.Linear(cfg.m_dim, len(self.token_vocab))
-        ) 
+        )
 
         self.max_dec_len = cfg.max_dec_len
         self._reset_parameters()
@@ -232,7 +232,7 @@ class TorchTFDecHead(MetaDecHead):
 
         self.predictor = nn.Sequential(
             nn.Linear(cfg.m_dim, len(self.token_vocab))
-        ) 
+        )
 
         self.max_dec_len = cfg.max_dec_len
         self._reset_parameters()

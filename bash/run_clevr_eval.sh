@@ -37,11 +37,14 @@ eval_name="CLEVR_val_captions.one_hop.json"
 
 alias_name=sgi_test
 model_file=00079100.pth
+model_file=00000643.pth
 
 # train: clevr 
 model_name="sgi.test.2rel.lr.8h.pcat"
 model_name="sgi.test.2rel.lf.8h.padd"
 model_name="sgi.test.2rel.lr.8h.pcat.bak"
+model_name="sgi.test.2rel.lr.8h.pcat.bak"
+model_name="sgi.map.case5.fake.learned.pad.case2.2-4-4.dense.wd8.bak"
 mtask="
 verbose=False alias_name=$alias_name model_root=$model_root model_name=$model_name model_file=$model_file 
 
@@ -50,7 +53,10 @@ data.enc_vocab_name=$enc_vocab_name data.dec_vocab_name=$dec_vocab_name
 
 data.relation_words=[left,right]
 data.cate_type=atomic_object
-data.cate_max_len=64
+data.cate_max_len=1
+data.mlm_prob=0.1
+
+model.loss.name=MLMLossHead
 
 model.loss.optim_only_relation=False
 model.decoder.num_p=512 
@@ -67,7 +73,7 @@ model.relation.num_layer=2 model.relation.t_dropout=0 model.relation.p_dropout=0
 
 running.epochs=100 running.batch_size=5 running.peep_rate=100 
 running.save_rate=1e9 running.save_epoch=True running.skip_save=True running.save_last=True
-data.eval_name=$eval_name data.eval_samples=1
+data.eval_name=$eval_name data.eval_samples=1e9
 "
 
 #data.relation_words=[left,front]

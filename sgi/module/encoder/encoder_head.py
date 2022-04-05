@@ -140,7 +140,7 @@ class MetaEncHead(nn.Module):
                 positions = positions.view(shape)
             else:
                 bbox = bbox.clone()
-                bbox[:, :, 1:] = 0. # only x matters for left / right relation
+                #bbox[:, :, 1:] = 0. # only x matters for left / right relation
                 #bbox = bbox * 10 # might make it easier to learn?
                 positions = self.position_embed(bbox)
                 #positions = F.relu(positions)

@@ -14,6 +14,7 @@ __all__ = [
     "SignTFAttention",
     "FakeTFAttention",
     "RelationTFAttention",
+    "MetaModule",
     "_get_activation_fn",
     "_get_initializr_fn",
     "_get_clones",
@@ -115,6 +116,9 @@ class MiniTFBlock(MetaModule):
         **kwargs,
     ):
         super().__init__()
+
+        from .special_tf import SpecialTFAttention # TODO HACK
+
         self.intra_attn = eval(attn_cls_intra)(
             D, num_head_intra or N, attn_dropout=attn_dropout, proj_dropout=proj_dropout,
             sign_q=sign_q_intra, sign_k=sign_k_intra, q_activation=q_activation, k_activation=k_activation, **kwargs
@@ -580,7 +584,8 @@ class SortTFAttention(SignTFAttention):
             pv = old_v.unsqueeze(-2) @ new_p.unsqueeze(0) # (B, L, D)
             pv = pv.squeeze(-2)
 
-            v = pv # + v
+            #v = pv # local-only
+            v = (pv + v) * 0.5 # global and local
 
         elif k.data_ptr() == v.data_ptr():
             k, v = self._proj_kv(k)
