@@ -1,5 +1,5 @@
 import numpy as np
-import os, sys, time, math
+import os, sys, time, math, copy
 import torch
 from torch import nn, Tensor
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
@@ -63,6 +63,7 @@ class LMLossHead(LossHead):
             word: self.token_vocab(word) for word in relation_words
         }
         self.accuracies = {word: [0] * 2 for word in relation_words + ["overall"]}
+        self.subset_accuracies = copy.deepcopy(self.accuracies)
         self.alpha_l1 = cfg.alpha_l1
         self.reduce = False 
 
@@ -95,8 +96,13 @@ class LMLossHead(LossHead):
         result = " ".join(
             ["REL:"] + [f"{k}: {(v[0] / v[1]) * 100:.3f} ({v[1]})" for k, v in self.accuracies.items()]
         )
+        subset_result = " ".join(
+            ["REL-ONLY:"] + [f"{k}: {(v[0] / v[1]) * 100:.3f} ({v[1]})" for k, v in self.subset_accuracies.items()]
+        )
         self.accuracies = {k: [0] * 2 for k, _ in self.accuracies.items()} # reset
-        return result 
+        self.subset_accuracies = copy.deepcopy(self.accuracies)
+        result = f"{result}\n{subset_result}"
+        return result
 
     def _estimate_loss(self, logits, x2):
         losses = self.loss_fn(
@@ -110,6 +116,7 @@ class LMLossHead(LossHead):
         return loss, (ntoken, losses)
 
     def infer(self, x1, x2, *args, **kwargs): 
+        x1_old, x2_old = x1, x2
         x1_new, x2_new = self.select(x1, x2)
         results = self._estimate_loss(x1_new, x2_new)
         # overall and relation-specific loss
@@ -125,6 +132,29 @@ class LMLossHead(LossHead):
                 metric[1] += gold.sum()
             else:
                 metric[0] += ((x1 == x2) * mask).sum() 
+                metric[1] += mask.sum()
+
+        # only compare relation words
+        masked_dim = torch.tensor([
+            i for i in range(len(self.token_vocab)) if i not in list(self.relation_words.values())
+        ], device=x1.device)
+        x1 = x1_old.clone()
+        x1[..., masked_dim] = -float("inf")
+        x1 = x1.argmax(dim=-1).reshape(-1)
+        new_mask = False
+        for _, wid in self.relation_words.items():
+            wid_mask = x2 == wid
+            new_mask = wid_mask | new_mask
+        mask = new_mask & mask
+        for word, metric in self.subset_accuracies.items():
+            if word in self.relation_words: # overall loss
+                wid = self.relation_words[word]
+                gold = (x2 == wid) * mask
+                pred = (x1 == wid) * gold
+                metric[0] += pred.sum()
+                metric[1] += gold.sum()
+            else:
+                metric[0] += ((x1 == x2) * mask).sum()
                 metric[1] += mask.sum()
         return results 
 

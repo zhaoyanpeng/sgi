@@ -47,6 +47,7 @@ class SGIMiniTFMLMDecHead(MiniTFDecHead):
         mlm_inputs: Tensor=None,
         mlm_labels: Tensor=None,
         inter_attn_mask: Tensor=None,
+        epoch_beta: float=0.,
         infer: bool=False,
         **kwargs,
     ):
@@ -77,17 +78,19 @@ class SGIMiniTFMLMDecHead(MiniTFDecHead):
         x = self._encode_positions(i_seqs)
 
         if self.encoder is None:
-            return self.predictor(x), mlm_labels, {} 
+            pass #return self.predictor(x), mlm_labels, {}
 
-        x, attn_weights = self.encoder(
-            x,
-            memory=memory,
-            self_attn_mask=None,
-            memo_attn_mask=memo_attn_mask,
-            self_key_padding_mask=self_key_padding_mask,
-            memo_key_padding_mask=memo_key_padding_mask,
-            require_attn_weight=True
-        )
+        attn_weights = list()
+        if self.encoder is not None:
+            x, attn_weights = self.encoder(
+                x,
+                memory=memory,
+                self_attn_mask=None,
+                memo_attn_mask=memo_attn_mask,
+                self_key_padding_mask=self_key_padding_mask,
+                memo_key_padding_mask=memo_key_padding_mask,
+                require_attn_weight=True
+            )
 
         x, attn_weights_ = self.post_encoder(
             x,
@@ -96,7 +99,8 @@ class SGIMiniTFMLMDecHead(MiniTFDecHead):
             memo_attn_mask=memo_attn_mask,
             self_key_padding_mask=self_key_padding_mask,
             memo_key_padding_mask=memo_key_padding_mask,
-            require_attn_weight=True
+            require_attn_weight=True,
+            epoch_beta=epoch_beta,
         )
 
         intra, (inter, logit_prior) = attn_weights_ # final layer
@@ -105,8 +109,13 @@ class SGIMiniTFMLMDecHead(MiniTFDecHead):
         x = self.predictor(x)
         
         x_logit = x.log_softmax(dim=-1)
-        x = x_logit = (x_logit + logit_prior.unsqueeze(-1)).logsumexp(dim=2)
-        # x.exp().sum(-1) should be all 1s
+        if self.training:
+            x = x_logit = (x_logit + logit_prior.unsqueeze(-1)).logsumexp(dim=2)
+            # x.exp().sum(-1) should be all 1s
+        else: # should never do inference here
+            k = x_logit.shape[-1]
+            indice = logit_prior.argmax(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, -1, k)
+            x = x_logit = x_logit.gather(2, indice).squeeze(2)
         
         return x, mlm_labels, {"attns": attn_weights}
 
@@ -156,15 +165,17 @@ class SGIMiniTFMLMDecHead(MiniTFDecHead):
 
             x = self._encode_positions(i_seqs)
 
-            x, attn_weights = self.encoder(
-                x,
-                memory=memory,
-                self_attn_mask=None,
-                memo_attn_mask=memo_attn_mask,
-                self_key_padding_mask=self_key_padding_mask,
-                memo_key_padding_mask=memo_key_padding_mask,
-                require_attn_weight=True
-            )
+            attn_weights = list()
+            if self.encoder is not None:
+                x, attn_weights = self.encoder(
+                    x,
+                    memory=memory,
+                    self_attn_mask=None,
+                    memo_attn_mask=memo_attn_mask,
+                    self_key_padding_mask=self_key_padding_mask,
+                    memo_key_padding_mask=memo_key_padding_mask,
+                    require_attn_weight=True
+                )
 
             x, attn_weights_ = self.post_encoder(
                 x,
@@ -202,10 +213,15 @@ class SGIMiniTFMLMDecHead(MiniTFDecHead):
 
         x = self.predictor(x)
         
-        x_logit = x.log_softmax(dim=-1)
-        x = x_logit = (x_logit + logit_prior.unsqueeze(-1)).logsumexp(dim=2)
-        # x.exp().sum(-1) should be all 1s
+        x_logit = x_logit_old = x.log_softmax(dim=-1)
+        if self.training:
+            x = x_logit = (x_logit + logit_prior.unsqueeze(-1)).logsumexp(dim=2)
+            # x.exp().sum(-1) should be all 1s
+        else:
+            k = x_logit.shape[-1]
+            indice = logit_prior.argmax(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, -1, k)
+            x = x_logit = x_logit.gather(2, indice).squeeze(2)
 
         mlm_labels = x_clone.clone()
         mlm_labels[special_token_masks] = -100
-        return x, mlm_labels, {"attns": attn_weights}
+        return x, mlm_labels, {"attns": attn_weights, "pair_logit": x_logit_old}

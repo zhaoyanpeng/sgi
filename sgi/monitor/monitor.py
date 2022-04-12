@@ -6,6 +6,7 @@ import json
 import time
 import torch
 import random
+import itertools
 import numpy as np
 from torch import nn, Tensor
 
@@ -42,6 +43,21 @@ class Monitor(Monitor):
         ) if torch.distributed.is_initialized() else model 
         self.model.train(not cfg.eval)
         self.build_optimizer(tunable_params)
+
+        epoch_beta = []
+        milestones = list(cfg.running.milestones)
+        first_two = milestones[:2]
+        milestones = [0] + milestones[2:]
+        if len(milestones) > 1:
+            start, end = first_two
+            betas = np.linspace(start, end, num=len(milestones))
+            stone_list = milestones #[0] + milestones
+            count_list = [stone_list[i] - stone_list[i - 1] for i in range(1, len(stone_list))]
+            betas = [[beta] * count for count, beta in zip(count_list, betas)]
+            epoch_beta = list(itertools.chain.from_iterable(betas))
+        if len(epoch_beta) < cfg.running.epochs:
+            epoch_beta = epoch_beta + [0.] * (cfg.running.epochs - len(epoch_beta))
+        self.epoch_beta = epoch_beta
 
     def show_batch(self, batch, meta):
         def recover_boxes(boxes, width, height):
@@ -156,6 +172,7 @@ class Monitor(Monitor):
 
     def epoch(self, iepoch):
         self.model.reset()
+        epoch_beta = self.epoch_beta[iepoch]
         all_time = defaultdict(list)
         self.timeit(all_time)        
         device_ids = [i for i in range(self.cfg.num_gpus)]
@@ -170,6 +187,7 @@ class Monitor(Monitor):
             #self.show_batch(batch, meta)
 
             batch_dict = self.make_batch(batch) 
+            batch_dict["epoch_beta"] = epoch_beta
 
             self.optim_step += 1 
             bsize = batch_dict["sequences"].shape[0]

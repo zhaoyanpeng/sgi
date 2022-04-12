@@ -6,3 +6,4 @@ batch_size: 32
 epochs: 30 
 save_epoch: False 
 optim_rate: 1
+milestones: []
