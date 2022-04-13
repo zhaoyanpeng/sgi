@@ -27,61 +27,39 @@ dec_vocab_name="captions_train.pos.topk.dict"
 enc_vocab_name="object_label.split.train.70k.topk.dict"
 dec_vocab_name="captions_train.70k.topk.dict"
 
-data_name="CLEVR_train_captions.toy.json"
-eval_name="CLEVR_train_captions.toy.json"
-
 data_name="CLEVR_train_captions.70k.one_hop.json"
 eval_name="CLEVR_val_captions.one_hop.json"
+
+dec_vocab_name="captions_train.2.0.topk.dict"
+
+
+data_name="CLEVR_train_captions.pos2.0.toy.json"
+eval_name="CLEVR_train_captions.pos2.0.toy.json"
+
+data_name="CLEVR_train_captions.2.0.one_hop.json"
+eval_name="CLEVR_val_captions.2.0.one_hop.json"
 
 # bash bash/run_clevr_base.sh default 0
 
 alias_name=sgi_test
-model_file=00079100.pth
-model_file=00000643.pth
+model_file=00000525.pth
 
 # train: clevr 
-model_name="sgi.test.2rel.lr.8h.pcat"
-model_name="sgi.test.2rel.lf.8h.padd"
-model_name="sgi.test.2rel.lr.8h.pcat.bak"
-model_name="sgi.test.2rel.lr.8h.pcat.bak"
-model_name="sgi.map.case5.fake.learned.pad.case2.2-4-4.dense.wd8.bak"
+model_name="sgi.reason.learned.wd8.p15.d4-2.mini.e1.11.m1.shark.bak"
 mtask="
 verbose=False alias_name=$alias_name model_root=$model_root model_name=$model_name model_file=$model_file 
-
-optimizer.warmup=False optimizer.weight_decay=1e-6
 data.enc_vocab_name=$enc_vocab_name data.dec_vocab_name=$dec_vocab_name
 
+data.input_cap_type=full
+
 data.relation_words=[left,right]
-data.cate_type=atomic_object
+data.cate_type=\"\"
 data.cate_max_len=1
-data.mlm_prob=0.1
+data.mlm_prob=0.15
 
-model.loss.name=MLMLossHead
-
-model.loss.optim_only_relation=False
-model.decoder.num_p=512 
-model.relation.num_relation=32
-model.relation.num_p=4 model.relation.cat_p=True model.relation.p_dim=512 model.relation.use_only_pos=False
-
-model.encoder.num_p=-1 model.encoder.w_dim=128 model.encoder.num_w=4
-optimizer.lr=5e-5 optimizer.scheduler=[MultiStepLR,{milestones:[15,36,45,50],gamma:0.5}]
-
-model.encoder.attn_cls_intra=RelationTFAttention
-model.encoder.num_layer=2 model.encoder.t_dropout=0. model.encoder.p_dropout=0. model.encoder.num_head=8
-model.decoder.num_layer=2 model.decoder.t_dropout=0 model.decoder.p_dropout=0
-model.relation.num_layer=2 model.relation.t_dropout=0 model.relation.p_dropout=0 model.relation.num_head=8
-
-running.epochs=100 running.batch_size=5 running.peep_rate=100 
-running.save_rate=1e9 running.save_epoch=True running.skip_save=True running.save_last=True
-data.eval_name=$eval_name data.eval_samples=1e9
+running.batch_size=50
+data.eval_name=$eval_name data.eval_samples=1e3
 "
-
-#data.relation_words=[left,front]
-#data.relation_words=[left,right,front,behind]
-#running.epochs=1 running.batch_size=2 running.peep_rate=1 
-#optimizer.lr=1e-4 optimizer.scheduler=[MultiStepLR,{milestones:[10,30,60,90],gamma:0.5}]
-#running.save_rate=1e9 running.save_epoch=False
-#model.decoder.require_inter_attn=True
 
 # config
 extra="$mtask "
@@ -93,9 +71,10 @@ python train.py port=$port num_gpus=$ngpu eval=True mode=$mode num_proc=$num_pro
     alias_root=$alias_root data.data_name=$data_name data.data_root=$data_root \
     +model/encoder=mini_tf \
     +model/decoder=mini_tf \
-    +model/relation=mini_tf \
+    +model/relation=dummy \
     +model/loss=ce_lm \
     +optimizer=default \
     +data=clevr \
     +running=$run_type $extra 
 #> ./log/$model_name 2>&1 &
+

@@ -94,10 +94,10 @@ class LMLossHead(LossHead):
     def report(self, gold_file=None):
         # compute accuracies, called every epoch
         result = " ".join(
-            ["REL:"] + [f"{k}: {(v[0] / v[1]) * 100:.3f} ({v[1]})" for k, v in self.accuracies.items()]
+            ["REL:"] + [f"{k}: {(v[0] / v[1] if v[1] != 0. else 1.) * 100:.3f} ({v[1]})" for k, v in self.accuracies.items()]
         )
         subset_result = " ".join(
-            ["REL-ONLY:"] + [f"{k}: {(v[0] / v[1]) * 100:.3f} ({v[1]})" for k, v in self.subset_accuracies.items()]
+            ["REL-ONLY:"] + [f"{k}: {(v[0] / v[1] if v[1] != 0. else 1.) * 100:.3f} ({v[1]})" for k, v in self.subset_accuracies.items()]
         )
         self.accuracies = {k: [0] * 2 for k, _ in self.accuracies.items()} # reset
         self.subset_accuracies = copy.deepcopy(self.accuracies)

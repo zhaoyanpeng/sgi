@@ -126,6 +126,7 @@ class Monitor(object):
             ): # distributed eval
             report = ""
             if self.evalloader is not None:
+                self.echo("EVAL START")
                 self.model.train(False)
                 with torch.no_grad():
                     report = self.infer(

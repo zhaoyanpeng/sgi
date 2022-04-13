@@ -37,6 +37,7 @@ class SGIMiniTFMLMDecHead(MiniTFDecHead):
             sign_k_inter=cfg.sign_k_inter,
             inter_layers=[], #list(cfg.inter_layers),
         )
+        self.split_vl = getattr(cfg, "split_vl", False)
 
     def forward(
         self,
@@ -100,12 +101,14 @@ class SGIMiniTFMLMDecHead(MiniTFDecHead):
             self_key_padding_mask=self_key_padding_mask,
             memo_key_padding_mask=memo_key_padding_mask,
             require_attn_weight=True,
+            split_vl=self.split_vl,
             epoch_beta=epoch_beta,
         )
 
         intra, (inter, logit_prior) = attn_weights_ # final layer
         attn_weights.append((intra, inter))
 
+        """
         x = self.predictor(x)
         
         x_logit = x.log_softmax(dim=-1)
@@ -116,6 +119,9 @@ class SGIMiniTFMLMDecHead(MiniTFDecHead):
             k = x_logit.shape[-1]
             indice = logit_prior.argmax(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, -1, k)
             x = x_logit = x_logit.gather(2, indice).squeeze(2)
+        """
+        x_old = x
+        x, _ = self.predict(x, logit_prior)
         
         return x, mlm_labels, {"attns": attn_weights}
 
@@ -184,7 +190,8 @@ class SGIMiniTFMLMDecHead(MiniTFDecHead):
                 memo_attn_mask=memo_attn_mask,
                 self_key_padding_mask=self_key_padding_mask,
                 memo_key_padding_mask=memo_key_padding_mask,
-                require_attn_weight=True
+                require_attn_weight=True,
+                split_vl=self.split_vl,
             )
 
             intra, (inter, logit_prior) = attn_weights_ # final layer
@@ -211,6 +218,7 @@ class SGIMiniTFMLMDecHead(MiniTFDecHead):
         x = torch.stack(dec_outs, 1)
         logit_prior = torch.stack(logit_priors, 1)
 
+        """
         x = self.predictor(x)
         
         x_logit = x_logit_old = x.log_softmax(dim=-1)
@@ -221,7 +229,44 @@ class SGIMiniTFMLMDecHead(MiniTFDecHead):
             k = x_logit.shape[-1]
             indice = logit_prior.argmax(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, -1, k)
             x = x_logit = x_logit.gather(2, indice).squeeze(2)
+        """
+        x, x_extra = self.predict(x, logit_prior)
+        x_extra.update({"attns": attn_weights})
 
         mlm_labels = x_clone.clone()
         mlm_labels[special_token_masks] = -100
-        return x, mlm_labels, {"attns": attn_weights, "pair_logit": x_logit_old}
+        return x, mlm_labels, x_extra
+
+    def predict(self, x, logit_prior):
+        x = self.predictor(x)
+
+        x_extra = {}
+
+        if x.shape[:3] == logit_prior.shape[:3]:
+            x_logit = x.log_softmax(dim=-1)
+        else:
+            assert x.shape[2] - logit_prior.shape[2] == 1, f"illogical shapes {x.shape} {logit_prior.shape}"
+            l_logit = x[:, :, :1]
+            v_logit = x[:, :, 1:]
+
+            alpha = 1. if self.training else .0
+
+            #alpha, v_logit = 1., v_logit * 1.0
+
+            x_logit = l_logit * alpha + v_logit
+            x_logit = x_logit.log_softmax(dim=-1)
+
+            x_extra["l_logit"] = l_logit
+            x_extra["v_logit"] = v_logit
+
+        x_extra["pair_logit"] = x_logit
+
+        if self.training:
+            x = x_logit = (x_logit + logit_prior.unsqueeze(-1)).logsumexp(dim=2)
+            # x.exp().sum(-1) should be all 1s
+        else:
+            k = x_logit.shape[-1]
+            indice = logit_prior.argmax(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, -1, k)
+            x = x_logit = x_logit.gather(2, indice).squeeze(2)
+
+        return x, x_extra

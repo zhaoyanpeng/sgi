@@ -15,12 +15,13 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
-from ..util import numel
+from ..util import numel, cat_name_list, estimate_precision_from_dict, update_precision_from_dict
 from ..data import MetadataCatalog, mask_tokens, connect_class2token
 from ..data import build_clevr_dataset as build_dataset
 from ..data import process_clevr_batch as process_batch
 from ..data import build_copy_dataset, process_copy_batch
 from ..data import build_clevr_dataset, process_clevr_batch
+from ..data.clevr_constant import type_attrs_ext, attr_types, syn_attrs
 from ..model import build_main_model
 from ..module import LARS, exclude_bias_or_norm, adjust_learning_rate
 
@@ -58,6 +59,10 @@ class Monitor(Monitor):
         if len(epoch_beta) < cfg.running.epochs:
             epoch_beta = epoch_beta + [0.] * (cfg.running.epochs - len(epoch_beta))
         self.epoch_beta = epoch_beta
+
+        self.type_attrs_ext_int = {
+            k: self.decoder_vocab(v) for k, v in type_attrs_ext.items()
+        } # for attr_and_rel evaluation
 
     def show_batch(self, batch, meta):
         def recover_boxes(boxes, width, height):
@@ -218,7 +223,9 @@ class Monitor(Monitor):
             return ppl_criteria
 
         for epoch_step, batch_data in enumerate(self.dataloader):
-            if epoch_step < 9544:
+            if iepoch < 38:
+                pass #continue
+            if epoch_step < 600:
                 pass #continue
             ppl_criteria = do_batch(batch_data, epoch_step + 1)
 
@@ -240,6 +247,19 @@ class Monitor(Monitor):
             dataloader.sampler.set_epoch(iepoch)
             nchunk = self.cfg.num_gpus
         peep_rate = max(10, (len(dataloader) // 10))
+
+        ### special eval ###
+        topk_bar = 8
+        verbose = True
+        l_ntrue, r_ntrue, f_ntrue, b_ntrue, l_ntotal, r_ntotal, same_ntrue, same_ntotal = [0] * 8
+
+        left_right = self.decoder_vocab(["left", "right"]) # TODO hard-coded relations
+        front_behind = self.decoder_vocab(["in_front_of", "behind"])
+
+        acc_by_attr = {k: [0, 0] for k in self.type_attrs_ext_int}
+        acc_by_attr_same = {k: [0, 0] for k in self.type_attrs_ext_int}
+        ### special eval ###
+
         start_time = time.time()
         epoch_step = total_word = 0
         loss_per_length = defaultdict(list)
@@ -255,10 +275,35 @@ class Monitor(Monitor):
             sequences = batch_dict["sequences"]
 
             batch_dict["infer"] = True
+            batch_dict["analyze"] = True
 
             loss_mean, (_, loss_out) = self.model(**batch_dict)
             ntoken, loss_all = loss_out 
             loss = loss_all.sum() if isinstance(loss_all, Tensor) else loss_mean * ntoken
+
+
+            ### special eval ###
+            if verbose:
+                (
+                    l_ntrue_a, r_ntrue_a, f_ntrue_a, b_ntrue_a, l_ntotal_a, r_ntotal_a,
+                    same_ntrue_a, same_ntotal_a, acc_by_attr_a, acc_by_attr_same_a, *_
+                ) = self.evaluate_attr_and_rel(
+                    self.type_attrs_ext_int, left_right, front_behind, topk_bar=8, verbose=False
+                )
+
+                l_ntrue += l_ntrue_a
+                r_ntrue += r_ntrue_a
+                f_ntrue += f_ntrue_a
+                b_ntrue += b_ntrue_a
+                l_ntotal += l_ntotal_a
+                r_ntotal += r_ntotal_a
+                same_ntrue += same_ntrue_a
+                same_ntotal += same_ntotal_a
+
+                update_precision_from_dict(acc_by_attr, acc_by_attr_a)
+                update_precision_from_dict(acc_by_attr_same, acc_by_attr_same_a)
+            ### special eval ###
+
 
             total_word += ntoken
             epoch_step += 1
@@ -287,6 +332,11 @@ class Monitor(Monitor):
         stats = model.stats()
         if stats != "": # could be empty
             self.echo(f"EVAL STATS: {model.stats()}")
+        # show special eval results
+        self.show_metric(
+            l_ntrue, r_ntrue, f_ntrue, b_ntrue, l_ntotal, r_ntotal,
+            same_ntrue, same_ntotal, acc_by_attr, acc_by_attr_same, topk_bar=topk_bar, verbose=verbose
+        )
         return model.report()
 
     def evaluate(self, dataloader, samples=float("inf"), iepoch=0):
@@ -297,6 +347,18 @@ class Monitor(Monitor):
             dataloader.sampler.set_epoch(iepoch)
             nchunk = self.cfg.num_gpus
         peep_rate = max(10, (len(dataloader) // 10))
+
+        ### special eval ###
+        topk_bar = 8
+        l_ntrue, r_ntrue, f_ntrue, b_ntrue, l_ntotal, r_ntotal, same_ntrue, same_ntotal = [0] * 8
+
+        left_right = self.decoder_vocab(["left", "right"]) # TODO hard-coded relations
+        front_behind = self.decoder_vocab(["in_front_of", "behind"])
+
+        acc_by_attr = {k: [0, 0] for k in self.type_attrs_ext_int}
+        acc_by_attr_same = {k: [0, 0] for k in self.type_attrs_ext_int}
+        ### special eval ###
+
         start_time = time.time()
         epoch_step = total_word = 0
         loss_per_length = defaultdict(list)
@@ -317,6 +379,29 @@ class Monitor(Monitor):
             loss_mean, (_, loss_out) = self.model(**batch_dict)
             ntoken, loss_all = loss_out
             loss = loss_all.sum() if isinstance(loss_all, Tensor) else loss_mean * ntoken
+
+
+            ### special eval ###
+            (
+                l_ntrue_a, r_ntrue_a, f_ntrue_a, b_ntrue_a, l_ntotal_a, r_ntotal_a,
+                same_ntrue_a, same_ntotal_a, acc_by_attr_a, acc_by_attr_same_a, *_
+            ) = self.evaluate_attr_and_rel(
+                self.type_attrs_ext_int, left_right, front_behind, topk_bar=8, verbose=False
+            )
+
+            l_ntrue += l_ntrue_a
+            r_ntrue += r_ntrue_a
+            f_ntrue += f_ntrue_a
+            b_ntrue += b_ntrue_a
+            l_ntotal += l_ntotal_a
+            r_ntotal += r_ntotal_a
+            same_ntrue += same_ntrue_a
+            same_ntotal += same_ntotal_a
+
+            update_precision_from_dict(acc_by_attr, acc_by_attr_a)
+            update_precision_from_dict(acc_by_attr_same, acc_by_attr_same_a)
+            ### special eval ###
+
 
             total_word += ntoken
             epoch_step += 1
@@ -342,4 +427,208 @@ class Monitor(Monitor):
         self.echo(f"# sample {nsample}; {nsample / (time.time() - start_time):.2f} samples/s")
         result = " ".join([f"{k}: {v[0] / v[1]:.2E}" for k, v in loss_per_length.items()])
         self.echo(f"Length-Loss - {result}")
+        # show special eval results
+        self.show_metric(
+            l_ntrue, r_ntrue, f_ntrue, b_ntrue, l_ntotal, r_ntotal,
+            same_ntrue, same_ntotal, acc_by_attr, acc_by_attr_same, topk_bar=topk_bar, verbose=True
+        )
         return model.report()
+
+    def decode_batch(
+        self, obj_names=None, obj_masks=None, sequences=None, obj_boxes=None,
+        file_name=None, enc_extra=None, dec_extra=None, shape=(320, 480), **kwargs
+    ):
+        obj_count = (obj_masks == False).sum(-1).tolist()
+        obj_names = [
+            self.encoder_vocab(obj_names[i][:l].tolist())
+            for i, l in enumerate(obj_count)
+        ]
+        #print(obj_names, obj_count)
+
+        seq_count = (sequences != self.decoder_vocab.PAD_IDX).sum(-1).tolist()
+        seq_names = [
+            self.decoder_vocab(sequences[i][1:l].tolist()) + [self.decoder_vocab.EOS]
+            for i, l in enumerate(seq_count)
+        ]
+        #print(seq_count, len(seq_count))
+
+        obj_names = cat_name_list(obj_names)
+        #print(obj_names)
+
+        h, w = shape
+        obj_boxes = obj_boxes.clone()
+        obj_boxes[:, :, 0::2] *= w # w
+        obj_boxes[:, :, 1::2] *= h # h
+        obj_boxes[:, :, 2] -= obj_boxes[:, :, 0]
+        obj_boxes[:, :, 3] -= obj_boxes[:, :, 1]
+        obj_boxes = obj_boxes.long()
+        obj_boxes = [
+            obj_boxes[i][:l].tolist() for i, l in enumerate(obj_count)
+        ]
+        #print(obj_boxes)
+
+        return obj_names, obj_boxes, seq_names, file_name
+
+    def show_metric(
+        self, l_ntrue, r_ntrue, f_ntrue, b_ntrue, l_ntotal, r_ntotal,
+        same_ntrue, same_ntotal, acc_by_attr, acc_by_attr_same, topk_bar, verbose=False
+    ):
+        if not verbose:
+            return
+        same = same_ntrue / same_ntotal * 100
+        ll = l_ntrue / l_ntotal * 100
+        rr = r_ntrue / r_ntotal * 100
+        ff = f_ntrue / l_ntotal * 100
+        bb = b_ntrue / r_ntotal * 100
+
+        msg = (
+            f"Purity (set size {topk_bar}): {same:.2f} ({same_ntotal / topk_bar:.0f})\n" +
+            f"Gold 'left' and hypothesis 'left': ({l_ntotal}) {ll:.2f}, otherwise {100 - ll:.2f}\n" +
+            f"Gold 'right' and hypothesis 'right': ({r_ntotal}) {rr:.2f}, otherwise {100 - rr:.2f}\n" +
+            f"Gold 'front' and hypothesis 'front': ({l_ntotal}) {ff:.2f}, otherwise {100 - ff:.2f}\n" +
+            f"Gold 'behind' and hypothesis 'behind': ({r_ntotal}) {bb:.2f}, otherwise {100 - bb:.2f}"
+        )
+
+        attr_msg = estimate_precision_from_dict(acc_by_attr, " ALL")
+        attr_same_msg = estimate_precision_from_dict(acc_by_attr_same, "SAME")
+        self.echo(f"\n{msg}\n{attr_msg}\n{attr_same_msg}")
+
+    def evaluate_attr_and_rel(
+        self, type_attrs_ext_int, left_right, front_behind, topk_bar=8, verbose=False
+    ):
+        pair_logits = self.model.last_batch["dec_extra"]["pair_logit"]
+        obj_names, obj_boxes, *_ = self.decode_batch(**self.model.last_batch)
+
+        l_ntrue, r_ntrue, b_ntrue, f_ntrue, l_ntotal, r_ntotal = [0] * 6
+        ntrue, ntotal, same_ntrue, same_ntotal = [0] * 4
+
+        vocab_size = len(self.decoder_vocab)
+        acc_by_attr = {k: [0, 0] for k in type_attrs_ext_int}
+        acc_by_attr_same = {k: [0, 0] for k in type_attrs_ext_int}
+
+        for ib, pair_logit in enumerate(pair_logits):
+            pair_logit = pair_logit[0]
+
+            S = int(np.sqrt(pair_logit.shape[0]))
+            indice1 = torch.arange(S, device=self.device).repeat_interleave(S)
+            indice2 = torch.arange(S, device=self.device).repeat(S)
+
+            obj_list = obj_names[ib]
+            box_list = obj_boxes[ib]
+            assert len(obj_list) == len(box_list)
+
+            obj_list = obj_list + [[]] * (S - len(obj_list))
+            box_list = box_list + [[]] * (S - len(box_list))
+
+            all_pairs = [obj_list[i : i + 1] + obj_list[j : j + 1] + [i, j] for i, j in zip(indice1.cpu().tolist(), indice2.cpu().tolist())]
+            all_boxes = [box_list[i : i + 1] + box_list[j : j + 1] + [i, j] for i, j in zip(indice1.cpu().tolist(), indice2.cpu().tolist())]
+
+            indicator = [True if len(pair[0]) > 0 and len(pair[1]) > 0 else False for pair in all_pairs]
+
+            pairs = [all_pairs[iflag] for iflag, flag in enumerate(indicator) if flag]
+            boxes = [all_boxes[iflag] for iflag, flag in enumerate(indicator) if flag]
+            plogits = [pair_logit[iflag] for iflag, flag in enumerate(indicator) if flag]
+
+            for pair, box, plogit in zip(pairs, boxes, plogits):
+                id0, id1 = pair[2:4]
+                pair = pair[:2]
+
+                box0, box1 = box[:2]
+                cx0, cy0 = box0[0] + box0[2] * 0.5, box0[1] + box0[3] * 0.5
+                cx1, cy1 = box1[0] + box1[2] * 0.5, box1[1] + box1[3] * 0.5
+
+                valid_attr = set(list(" ".join(pair).split()))
+                valid_attr_id = self.decoder_vocab(list(valid_attr))
+
+                attr_by_type = defaultdict(list)
+                for attr in valid_attr:
+                    attr_type = attr_types[attr]
+                    attr_by_type[attr_type].append(attr)
+
+                attr_by_type_ext = defaultdict(list)
+                attr_by_type_ext_int = defaultdict(list)
+                for k, v in attr_by_type.items():
+                    v_new = [] + v
+                    for vv in v:
+                        syns = syn_attrs.get(vv, None)
+                        if syns is None:
+                            continue
+                        v_new.extend(syns)
+                    v_new = list(set(v_new))
+                    attr_by_type_ext[k] = v_new
+                    attr_by_type_ext_int[k] = self.decoder_vocab(v_new)
+
+                for k, v in attr_by_type_ext_int.items():
+                    assert k in type_attrs_ext_int
+                    all_attr_v = type_attrs_ext_int[k]
+
+                    a = torch.tensor([float("-inf")] * vocab_size, device=plogit.device)
+                    a[all_attr_v] = plogit[all_attr_v]
+
+                    kmax = a.argmax().cpu().item()
+                    is_true = kmax in v
+
+                    acc_by_attr[k][0] += is_true
+                    acc_by_attr[k][1] += 1
+
+                    if id0 == id1:
+                        acc_by_attr_same[k][0] += is_true
+                        acc_by_attr_same[k][1] += 1
+
+
+                ordered, indice = plogit.sort(descending=True)
+                topk = indice.cpu().tolist()[:topk_bar]
+
+                overlap = set(valid_attr_id) & set(topk)
+
+                ntotal += len(topk)
+                ntrue += len(overlap)
+
+                if id0 == id1:
+                    same_ntrue += len(overlap)
+                    same_ntotal += len(topk)
+
+                if id0 != id1:
+                    all_attr_v = left_right
+                    a = torch.tensor([float("-inf")] * vocab_size, device=plogit.device)
+                    a[all_attr_v] = plogit[all_attr_v]
+                    kmax_lr = a.argmax().cpu().item()
+
+                    all_attr_v = front_behind
+                    a = torch.tensor([float("-inf")] * vocab_size, device=plogit.device)
+                    a[all_attr_v] = plogit[all_attr_v]
+                    kmax_fb = a.argmax().cpu().item()
+
+                    if id0 < id1:
+                        l_ntotal += 1
+                        if kmax_lr == left_right[0]:
+                            l_ntrue += 1
+
+                        if cy0 > cy1: # gold front
+                            if kmax_fb == front_behind[0]:
+                                f_ntrue += 1
+                        else: # gold behind
+                            if kmax_fb == front_behind[1]:
+                                b_ntrue += 1
+                    else:
+                        r_ntotal += 1
+                        if kmax_lr == left_right[1]:
+                            r_ntrue += 1
+
+                        if cy0 > cy1: # gold front
+                            if kmax_fb == front_behind[0]:
+                                f_ntrue += 1
+                        else: # gold behind
+                            if kmax_fb == front_behind[1]:
+                                b_ntrue += 1
+
+        self.show_metric(
+            l_ntrue, r_ntrue, f_ntrue, b_ntrue, l_ntotal, r_ntotal,
+            same_ntrue, same_ntotal, acc_by_attr, acc_by_attr_same, topk_bar=topk_bar, verbose=verbose
+        )
+
+        return (
+            l_ntrue, r_ntrue, f_ntrue, b_ntrue, l_ntotal, r_ntotal,
+            same_ntrue, same_ntotal, acc_by_attr, acc_by_attr_same,
+            pairs, torch.stack(plogits, 0)
+        )

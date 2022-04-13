@@ -22,6 +22,7 @@ class SpecialTFBlock(MiniTFBlock):
         memo_attn_mask: Tensor = None,
         memo_key_padding_mask: Tensor = None,
         epoch_beta: float = 0.,
+        split_vl: bool = False, # split vision and language
         **kwargs
     ):
         if kv is None:
@@ -47,13 +48,25 @@ class SpecialTFBlock(MiniTFBlock):
                 key_padding_mask = memo_key_padding_mask, 
                 **kwargs
             ) 
-            dim = 1 if x.shape[1] != residual.shape[1] else 2
+            dim = 1 if self.inter_attn.mode != 2 else 2
+            #dim = 1 if x.shape[1] != residual.shape[1] else 2 # FIXME sentence length and pair number may be equal
             x = x.unsqueeze(dim)
 
+            alpha = .0 if not split_vl and not self.training else 1.
+
+            #alpha, x = 1., x * .0
+
+            stack_first = True
+            if split_vl and stack_first:
+                alpha = .0
+                v, l = x, residual.unsqueeze(2)
+                v = v.expand(-1, l.shape[1], -1, -1)
+                x = torch.cat([l, v], dim=2)
+
             ## the standard
-            #residual = residual.unsqueeze(2)
+            residual = residual.unsqueeze(2) * alpha
             ## annealing
-            residual = residual.unsqueeze(2) * epoch_beta
+            #residual = residual.unsqueeze(2) * epoch_beta
             ## zero out
             #residual = torch.zeros_like(residual) # reset to zero
 
@@ -61,19 +74,31 @@ class SpecialTFBlock(MiniTFBlock):
             if zero and random.random() < p_zero and self.training:
                 residual = residual * 0.
 
-            ## the standard
-            x = self.inter_attn_ln(residual + self.inter_attn_dp(x))
-            ## dropout -> b
-            #x = self.inter_attn_ln(residual + F.dropout(x, p=0.25, training=self.training))
-            ## dropout -> ab
-            #x = self.inter_attn_ln(F.dropout(residual, p=0.15, training=self.training) + F.dropout(x, p=0.15, training=self.training))
-            ## dropout -> a
-            #x = self.inter_attn_ln(F.dropout(residual, p=0.25, training=self.training) + x)
+            if not split_vl or stack_first:
+                ## the standard
+                #x = self.inter_attn_ln(residual + self.inter_attn_dp(x))
+                ## dropout -> b
+                #x = self.inter_attn_ln(residual + F.dropout(x, p=0.15, training=self.training))
+                ## dropout -> ab
+                x = self.inter_attn_ln(F.dropout(residual, p=0.15, training=self.training) + F.dropout(x, p=0.15, training=self.training))
+                ## dropout -> a
+                #x = self.inter_attn_ln(F.dropout(residual, p=0.25, training=self.training) + x)
+            else:
+                v = self.inter_attn_ln(self.inter_attn_dp(x))
+                l = self.inter_attn_ln(residual)
 
-        ## the standard
-        x = self.ff_ln(x + self.ff_dp(self.ff(x)))
-        ## drop it out
-        #x = self.ff_ln(x + F.dropout(self.ff(x), p=0.15, training=self.training))
+        if not split_vl or stack_first:
+            ## the standard
+            x = self.ff_ln(x + self.ff_dp(self.ff(x)))
+            ## drop it out
+            #x = self.ff_ln(x + F.dropout(self.ff(x), p=0.15, training=self.training))
+        else:
+            v = self.ff_ln(v + self.ff_dp(self.ff(v)))
+            l = self.ff_ln(l + self.ff_dp(self.ff(l)))
+
+            v = v.expand(-1, l.shape[1], -1, -1)
+            x = torch.cat([l, v], dim=2)
+
         return x, (intra_attn_weight, inter_attn_weight)
 
 

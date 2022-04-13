@@ -56,3 +56,22 @@ def flip_and_shift(x, lengths, batch_first=True):
     if not batch_first:
         return x_reverse.transpose(0, 1)
     return x_reverse
+
+def estimate_precision_from_dict(data_dict, msg):
+    result = " ".join(
+        [f"{msg}:"] + [f"{k}: {(v[0] / v[1] if v[1] > 0 else 1.) * 100:.3f} ({v[1]})" for k, v in data_dict.items()]
+    )
+    return result
+
+def update_precision_from_dict(dict0, dict1):
+    for k, v in dict1.items():
+        v0 = dict0[k]
+        for iv, vv in enumerate(v):
+            v0[iv] += vv
+
+def cat_name_list(names):
+    if isinstance(names[0], list):
+        return [cat_name_list(x) for x in names]
+    if isinstance(names[0], str):
+        return " ".join(names)
+    return names
