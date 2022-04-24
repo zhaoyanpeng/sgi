@@ -42,10 +42,13 @@ eval_name="CLEVR_val_captions.2.0.one_hop.json"
 # bash bash/run_clevr_base.sh default 0
 
 alias_name=sgi_test
+model_file=00000643.pth
 model_file=00000525.pth
 
+
 # train: clevr 
-model_name="sgi.reason.learned.wd8.p15.d4-2.mini.e1.11.m1.shark.bak"
+model_name="sgi.reason.4rel.learned.wd8.p15.d4-2.mini.e1.11.m1.shark"
+model_name="sgi.reason.learned.wd8.p15.d4-2.mini.e1.11.m1.shark"
 mtask="
 verbose=False alias_name=$alias_name model_root=$model_root model_name=$model_name model_file=$model_file 
 data.enc_vocab_name=$enc_vocab_name data.dec_vocab_name=$dec_vocab_name
@@ -63,6 +66,8 @@ data.eval_name=$eval_name data.eval_samples=1e3
 
 # config
 extra="$mtask "
+
+#data.relation_words=[left,right,in_front_of,behind]
  
 #export CUDA_LAUNCH_BLOCKING=1
 #nohup python -m torch.utils.bottleneck train.py \

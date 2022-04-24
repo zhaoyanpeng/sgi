@@ -1,12 +1,13 @@
 from .decoder_head import build_decoder_head, DECODER_HEADS_REGISTRY
 
 from .rnn_head import RNNDecoderBase, StdRNNDecoder, InputFeedRNNDecoder
-from .sgi_head import SGIMiniTFMLMDecHead
+from .sgi_head import RouteMiniTFDecHead, SGIMiniTFMLMDecHead
 from .vi_head import StdRNNDecoderHead, ViRNNDecoderHead
 from .birnn_head import (
     CatThenAttendRNNDecoderHead, AttendThenCatRNNDecoderHead, BiInputFeedRNNDecoderHead
 )
 
+DECODER_HEADS_REGISTRY.register(RouteMiniTFDecHead)
 DECODER_HEADS_REGISTRY.register(SGIMiniTFMLMDecHead)
 
 DECODER_HEADS_REGISTRY.register(StdRNNDecoder)

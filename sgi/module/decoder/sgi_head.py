@@ -8,12 +8,49 @@ from torch.nn import TransformerDecoder, TransformerDecoderLayer
 
 from .. import PositionalEncoder, sign
 from .. import MiniTF, MiniTFBlock, SignTFBlock, MiniTFAttention
-from .. import SpecialTFBlock, SpecialTFAttention
+from .. import RouteTFBlock, SpecialTFBlock, SpecialTFAttention
 
 from .decoder_head import MiniTFDecHead
 
 
-class SGIMiniTFMLMDecHead(MiniTFDecHead):
+class RouteMiniTFDecHead(MiniTFDecHead):
+    def __init__(self, cfg, token_vocab):
+        super().__init__(cfg, token_vocab, skip_init=True)
+        self.encoder = None
+        if cfg.num_layer > 0:
+            layer_fn = lambda ilayer: eval(cfg.block)(
+                cfg.m_dim, cfg.num_head, cfg.f_dim, cfg.attn_cls_intra,
+                attn_cls_inter=cfg.attn_cls_inter,
+                ilayer=ilayer,
+                dropout=cfg.t_dropout,
+                qk_scale=cfg.qk_scale,
+                activation=cfg.activation,
+                attn_dropout=cfg.attn_dropout,
+                proj_dropout=cfg.proj_dropout,
+                self_ctx_dropout=cfg.route_self_dropout,
+                memo_ctx_dropout=cfg.route_memo_dropout,
+                num_head_intra=cfg.num_head_intra,
+                num_head_inter=cfg.num_head_inter,
+                q_activation=cfg.q_activation,
+                k_activation=cfg.k_activation,
+                num_pos=cfg.max_dec_len,
+                sign_q_intra=cfg.sign_q_intra,
+                sign_k_intra=cfg.sign_k_intra,
+                sign_q_inter=cfg.sign_q_inter,
+                sign_k_inter=cfg.sign_k_inter,
+                inter_layers=list(cfg.inter_layers),
+            )
+            self.encoder = MiniTF(layer_fn, cfg.num_layer)
+
+        self.predictor = nn.Sequential(
+            nn.Linear(cfg.m_dim, len(self.token_vocab))
+        )
+
+        self.max_dec_len = cfg.max_dec_len
+        self._reset_parameters()
+
+
+class SGIMiniTFMLMDecHead(RouteMiniTFDecHead):
     def __init__(self, cfg, token_vocab):
         super().__init__(cfg, token_vocab)
         # a special layer on top of the decoder
@@ -26,6 +63,8 @@ class SGIMiniTFMLMDecHead(MiniTFDecHead):
             activation=cfg.activation,
             attn_dropout=cfg.attn_dropout,
             proj_dropout=cfg.proj_dropout,
+            self_ctx_dropout=cfg.infer_self_dropout,
+            memo_ctx_dropout=cfg.infer_memo_dropout,
             num_head_intra=cfg.num_head_intra,
             num_head_inter=2, #cfg.num_head_inter,
             q_activation=cfg.q_activation,
@@ -36,6 +75,7 @@ class SGIMiniTFMLMDecHead(MiniTFDecHead):
             sign_q_inter=cfg.sign_q_inter,
             sign_k_inter=cfg.sign_k_inter,
             inter_layers=[], #list(cfg.inter_layers),
+            routing=False,
         )
         self.split_vl = getattr(cfg, "split_vl", False)
 

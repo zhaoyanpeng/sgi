@@ -7,12 +7,80 @@ import random
 from . import MetaModule, MiniTFBlock, MiniTFAttention
 
 __all__ = [
+    "RouteTFBlock",
     "SpecialTFBlock",
     "SpecialTFAttention",
 ]
 
 
+class RouteTFBlock(MiniTFBlock):
+    def __init__(
+        self, *args,
+        self_ctx_dropout: float = .0,
+        memo_ctx_dropout: float = .0,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.self_ctx_dp = nn.Dropout(self_ctx_dropout)
+        self.memo_ctx_dp = nn.Dropout(memo_ctx_dropout)
+
+    def forward(
+        self, q: Tensor,
+        kv: Tensor = None,
+        self_attn_mask: Tensor = None,
+        self_key_padding_mask: Tensor = None,
+        memory: Tensor = None,
+        memo_attn_mask: Tensor = None,
+        memo_key_padding_mask: Tensor = None,
+        **kwargs
+    ):
+        if kv is None:
+            k = v = q
+        else:
+            k = v = kv
+        residual = q
+        x, intra_attn_weight = self.intra_attn(
+            q, k, v,
+            attn_mask = self_attn_mask,
+            key_padding_mask = self_key_padding_mask,
+            **kwargs
+        )
+        x = self.intra_attn_ln(residual + self.intra_attn_dp(x))
+
+        inter_attn_weight = None
+        if self.inter_attn is not None:
+            k = v = memory
+            residual = q = x
+            x, inter_attn_weight = self.inter_attn(
+                q, k, v,
+                attn_mask = memo_attn_mask,
+                key_padding_mask = memo_key_padding_mask,
+                **kwargs
+            )
+            alpha = 1.
+            ## the standard
+            #x = self.inter_attn_ln(residual + self.inter_attn_dp(x))
+            ## dropout -> ab
+            alpha = .0 if not self.training else 1.
+
+            x = x * alpha # TODO simply skip inter attn at test time
+            x = self.inter_attn_ln(self.self_ctx_dp(residual) + self.memo_ctx_dp(x))
+
+        x = self.ff_ln(x + self.ff_dp(self.ff(x)))
+        return x, (intra_attn_weight, inter_attn_weight)
+
+
 class SpecialTFBlock(MiniTFBlock):
+    def __init__(
+        self, *args,
+        self_ctx_dropout: float = .0,
+        memo_ctx_dropout: float = .0,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.self_ctx_dp = nn.Dropout(self_ctx_dropout)
+        self.memo_ctx_dp = nn.Dropout(memo_ctx_dropout)
+
     def forward(
         self, q: Tensor,
         kv: Tensor = None,
@@ -80,9 +148,11 @@ class SpecialTFBlock(MiniTFBlock):
                 ## dropout -> b
                 #x = self.inter_attn_ln(residual + F.dropout(x, p=0.15, training=self.training))
                 ## dropout -> ab
-                x = self.inter_attn_ln(F.dropout(residual, p=0.15, training=self.training) + F.dropout(x, p=0.15, training=self.training))
+                #x = self.inter_attn_ln(F.dropout(residual, p=0.15, training=self.training) + F.dropout(x, p=0.15, training=self.training))
                 ## dropout -> a
-                #x = self.inter_attn_ln(F.dropout(residual, p=0.25, training=self.training) + x)
+                #x = self.inter_attn_ln(F.dropout(residual, p=0.15, training=self.training) + x)
+                ## dropout -> ab
+                x = self.inter_attn_ln(self.self_ctx_dp(residual) + self.memo_ctx_dp(x))
             else:
                 v = self.inter_attn_ln(self.inter_attn_dp(x))
                 l = self.inter_attn_ln(residual)
@@ -113,6 +183,7 @@ class SpecialTFAttention(MiniTFAttention):
         qk_scale: float = None,
         attn_dropout: float = .0,
         proj_dropout: float = .0,
+        routing: bool = True, # dynamic routing, not in the last layer
         **kwargs,
     ):
         super().__init__(
@@ -120,6 +191,7 @@ class SpecialTFAttention(MiniTFAttention):
         )
 
         self.shared_k = True
+        self.routing = routing
 
         self.mode = 1
         if self.mode in {1, 2}:
@@ -178,7 +250,9 @@ class SpecialTFAttention(MiniTFAttention):
             v1 = v[:, 0, indice1]
             v2 = v[:, 1, indice2]
             x = torch.cat([v1, v2], dim=-1)
-            x = self.proj_dp(self.proj(x))
+
+            if not self.routing:
+                x = self.proj_dp(self.proj(x))
 
             p = attn_weight.log_softmax(dim=-1)
 
@@ -191,7 +265,9 @@ class SpecialTFAttention(MiniTFAttention):
             v1 = v[:, indice1]
             v2 = v[:, indice2]
             x = torch.cat([v1, v2], dim=-1)
-            x = self.proj_dp(self.proj(x))
+
+            if not self.routing:
+                x = self.proj_dp(self.proj(x))
 
             p = attn_weight.log_softmax(dim=-1)
 
@@ -208,8 +284,16 @@ class SpecialTFAttention(MiniTFAttention):
             else:
                 indice = attn_weight.argmax(-1).transpose(1, 2).reshape(B, -1).unsqueeze(-1).expand(-1, -1, v.shape[-1])
                 x = v.gather(1, indice).reshape(B, T, -1)
-            x = self.proj_dp(self.proj(x))
+
+            if not self.routing:
+                x = self.proj_dp(self.proj(x))
 
             pair_logit = torch.zeros((B, T, 1), device=x.device)
+
+        if self.routing:
+            attn_weight_ = self.attn_dp(pair_logit.softmax(dim=-1))
+            x = attn_weight_ @ x
+            x = self.proj_dp(self.proj(x))
+            return x, attn_weight
 
         return x, (attn_weight, pair_logit)

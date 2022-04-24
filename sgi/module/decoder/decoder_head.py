@@ -99,8 +99,9 @@ class MetaDecHead(nn.Module):
 
 @DECODER_HEADS_REGISTRY.register()
 class MiniTFDecHead(MetaDecHead):
-    def __init__(self, cfg, token_vocab):
+    def __init__(self, cfg, token_vocab, skip_init=False):
         super().__init__(cfg, token_vocab)
+        if skip_init: return #
         self.encoder = None
         if cfg.num_layer > 0: 
             layer_fn = lambda ilayer: MiniTFBlock(
