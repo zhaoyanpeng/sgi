@@ -1,6 +1,8 @@
 name: clevr
 num_proc: ${num_proc}
 data_root: ""
+more_root: ${.data_root} # extra root, might be useful when images & text are in separate directories
+dump_root: ${.data_root} # in case there is output data
 data_name: "" 
 eval_name: "" 
 test_name: "" 

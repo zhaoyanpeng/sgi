@@ -154,8 +154,8 @@ class SpecialTFBlock(MiniTFBlock):
                 ## dropout -> ab
                 x = self.inter_attn_ln(self.self_ctx_dp(residual) + self.memo_ctx_dp(x))
             else:
-                v = self.inter_attn_ln(self.inter_attn_dp(x))
-                l = self.inter_attn_ln(residual)
+                v = self.inter_attn_ln(self.memo_ctx_dp(x))
+                l = self.inter_attn_ln(self.self_ctx_dp(residual))
 
         if not split_vl or stack_first:
             ## the standard
@@ -183,7 +183,7 @@ class SpecialTFAttention(MiniTFAttention):
         qk_scale: float = None,
         attn_dropout: float = .0,
         proj_dropout: float = .0,
-        routing: bool = True, # dynamic routing, not in the last layer
+        routing: bool = True, # dynamic routing, do not use in the last layer
         **kwargs,
     ):
         super().__init__(
@@ -252,7 +252,7 @@ class SpecialTFAttention(MiniTFAttention):
             x = torch.cat([v1, v2], dim=-1)
 
             if not self.routing:
-                x = self.proj_dp(self.proj(x))
+                pass #x = self.proj_dp(self.proj(x))
 
             p = attn_weight.log_softmax(dim=-1)
 

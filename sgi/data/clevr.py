@@ -66,9 +66,9 @@ class ClevrDataLoader(torch.utils.data.Dataset):
             obj_boxes = list()
             obj_classes = list()
 
-            #sorted_annos = sorted(item["annotations"], key=lambda x: x["obj_id"])
-            sorted_annos = sorted(item["annotations"], key=lambda x: x["bbox"][0])
-            item["relationships"] = compute_all_relationships(item, sorted_annos)
+            sorted_annos = sorted(item["annotations"], key=lambda x: x["obj_id"])
+            #sorted_annos = sorted(item["annotations"], key=lambda x: x["bbox"][0])
+            #item["relationships"] = compute_all_relationships(item, sorted_annos)
 
             for anno in sorted_annos:
                 x, y, w, h = anno["bbox"]
@@ -143,7 +143,7 @@ class ClevrDataLoader(torch.utils.data.Dataset):
                     rels.insert(0, 0)
                 rel_list.insert(0, list(range(1, nobj + 1)))
 
-        def filter_captions(captions, full_caps=None):
+        def filter_captions(captions, full_caps=None, part_caps=None):
             relations = list(cfg.relation_words)
             if cate_type is not None or len(relations) == 0:
                 return captions
@@ -162,8 +162,17 @@ class ClevrDataLoader(torch.utils.data.Dataset):
             if full_caps is not None:
                 assert len(full_caps) == len(captions), f"Captions mush be paired for shared masks"
                 full = [full_caps[i] for i, getitin in enumerate(masks) if getitin]
+            part = list()
+            if part_caps is not None:
+                assert len(part_caps) == len(captions), f"Captions mush be paired for shared masks"
+                part = [part_caps[i] for i, getitin in enumerate(masks) if getitin]
             #print("\n".join([" ".join(x) for x in final]))
-            final = final if self.input_cap_type == "captions" else full
+            if self.input_cap_type == "full_caps":
+                final = full 
+            elif self.input_cap_type == "part_caps":
+                final = part 
+            elif self.input_cap_type == "captions":
+                pass
             return final
 
         max_len = -1
@@ -173,7 +182,8 @@ class ClevrDataLoader(torch.utils.data.Dataset):
             for line in fr:
                 item = json.loads(line)
                 full_caps = item.get("full_caps", None)
-                captions = filter_captions(item["captions"], full_caps)
+                part_caps = item.get("part_caps", None)
+                captions = filter_captions(item["captions"], full_caps, part_caps)
                 if len(captions) == 0:
                     continue
                 #max_len = max(max_len, max([len(x) for x in captions]))
@@ -251,7 +261,7 @@ def collate_fun(data):
     }
     return union 
 
-def register_clevr_metadata(name="clevr"):
+def register_clevr_metadata(name="clevr", order='f"{size} {shape} {color} {material}"'):
     attribute_words = """
         {"size": ["small", "large"], "color": ["gray", "blue", "brown", "yellow", "red", "green", "purple", "cyan"],
         "material": ["rubber", "metal"], "shape": ["cube", "sphere", "cylinder"]}
@@ -262,7 +272,7 @@ def register_clevr_metadata(name="clevr"):
         for shape in attribute_words["shape"]:
             for color in attribute_words["color"]:
                 for material in attribute_words["material"]:
-                    attributes.append(f"{size} {shape} {color} {material}")
+                    attributes.append(eval(order))
     attributes.append("<unk>")
     nattribute = len(attributes)
     thing_dataset_id_to_contiguous_id = {i: i for i in range(nattribute)}
@@ -353,8 +363,13 @@ def build_clevr_dataset(cfg, train, echo):
     else:
         encoder_vocab = decoder_vocab
 
+    order = (
+        'f"{size} {shape} {color} {material}"'
+        if "mp" not in cfg.data_name else
+        'f"{size} {color} {material} {shape}"'
+    ) # TODO hard-coded for dataset containing object masks and part captions
     # customized vocab
-    register_clevr_metadata("clevr")
+    register_clevr_metadata("clevr", order)
     # list based vocab
     meta = MetadataCatalog.get("clevr")
     word_list = copy.deepcopy(meta.thing_classes)
