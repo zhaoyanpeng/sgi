@@ -25,3 +25,4 @@ dummy_pos_type: "" # all (0, 0, w, h); min (0, 0, 0, 0); max (w, h, w, h); mid (
 relation_words: [left, right, front, behind]
 input_cap_type: captions # real captions (captions) / full captions (full_caps)
 mlm_prob: -0.
+load_obj: False # load pre-encoded objects

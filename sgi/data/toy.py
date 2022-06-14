@@ -114,13 +114,16 @@ def process_copy_batch(union, encoder_vocab, decoder_vocab, cate_vocab, device, 
     items = tuple(items) + ((height, width),)
     return items 
 
-def build_dataloader(cfg, data_loader_cls, ifile, encoder_vocab, decoder_vocab, cate_vocab, train, echo, msg=""):
+def build_dataloader(
+    cfg, data_loader_cls, ifile, encoder_vocab, decoder_vocab, cate_vocab, train, echo, msg="", **kwargs
+):
     dataset = data_loader_cls(
         cfg, ifile, 
         encoder_vocab=encoder_vocab, 
         decoder_vocab=decoder_vocab, 
         cate_vocab=cate_vocab,
         train=train,
+        **kwargs,
     )
     if not train: 
         sampler = torch.utils.data.SequentialSampler(dataset)

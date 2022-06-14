@@ -52,6 +52,8 @@ class ClevrDataLoader(torch.utils.data.Dataset):
         self.cate_vocab = cate_vocab
         self.train = train
 
+        self.vroot = f"{cfg.more_root}" if cfg.load_obj else None
+
         meta = MetadataCatalog.get("clevr")
         unk_idx = meta.thing_classes.index(self.UNK)
         dum_idx = cate_vocab(self.DUM) if cate_vocab is not None else None
@@ -66,6 +68,8 @@ class ClevrDataLoader(torch.utils.data.Dataset):
             obj_boxes = list()
             obj_classes = list()
 
+            # must be sorted by id when using pre-encoded objects because the
+            # object vectors have been sorted that way.
             sorted_annos = sorted(item["annotations"], key=lambda x: x["obj_id"])
             #sorted_annos = sorted(item["annotations"], key=lambda x: x["bbox"][0])
             #item["relationships"] = compute_all_relationships(item, sorted_annos)
@@ -194,6 +198,10 @@ class ClevrDataLoader(torch.utils.data.Dataset):
                     "file_name": item["file_name"], 
                     "caption": captions,
                 }
+                if self.vroot is not None:
+                    npz_name = item["file_name"].rsplit(".", 1)[0]
+                    npz_file = f"{self.vroot}/{npz_name}.npz"
+                    new_item["objects"] = np.load(npz_file)["v"][1:] # remove background
                 (
                     new_item["obj_idxes"], 
                     new_item["obj_names"], 
@@ -232,6 +240,8 @@ class ClevrDataLoader(torch.utils.data.Dataset):
             "obj_names": item["obj_names"],
             "obj_boxes": item["obj_boxes"],
         }
+        if "objects" in item:
+            sample["objects"] = item["objects"]
 
         if self.cate_vocab is None:
             sample["caption"] = self.decoder_vocab(
@@ -345,6 +355,13 @@ def process_clevr_batch(union, encoder_vocab, decoder_vocab, cate_vocab, device,
         obj_idxes, obj_boxes, obj_masks, sequences, obj_names, obj_name_lengths
     ]]
     items = tuple(items) + ((height, width),)
+    if "objects" in union: # pre-encoded objects
+        dim = union["objects"][0].shape[-1]
+        objects = np.array(list(itertools.zip_longest(
+            *union["objects"], fillvalue=np.zeros(dim, dtype=np.float32)
+        ))).transpose(1, 0, 2)
+        #objects = objects[:, 1:] # remove background
+        items += (torch.tensor(objects, device=device),)
     return items 
 
 def build_clevr_dataset(cfg, train, echo):
