@@ -195,6 +195,43 @@ class MLMLossHead(LMLossHead):
         )
 
 @LOSS_HEADS_REGISTRY.register()
+class MLMLMLossHead(LMLossHead):
+    def __init__(self, cfg, token_vocab, **kwargs):
+        super().__init__(cfg, token_vocab, **kwargs)
+        self.alpha_lm = cfg.alpha_lm
+        self.ignore_index = -100
+        self.loss_fn = nn.CrossEntropyLoss(
+            reduction="none", ignore_index=self.ignore_index
+        )
+
+    def forward(self, x1, x2, *args, **kwargs):
+        l1_norm = self.regularize_attn(x1, x2, **kwargs)
+        if not self.training:
+            loss, (ntoken, losses) = self.infer(x1, x2, *args, **kwargs)
+            extra = {"ntoken": ntoken, "main_loss": loss, "l1_norm_loss": l1_norm}
+            return loss, (ntoken, extra)
+        logits = self.logit_scale.exp() * x1
+        if self.optim_only_relation and self.training:
+            logits, x2 = self.select(logits, x2)
+        loss, (ntoken, losses) = self._estimate_loss(logits, x2)
+        
+        # MLM & LM LOSSES
+        dec_extra = kwargs["dec_extra"]
+
+        x1 = dec_extra["x_lm"]
+        x2 = dec_extra["lm_labels"]
+
+        logits = self.logit_scale.exp() * x1
+        loss_lm, (ntoken_lm, _) = self._estimate_loss(logits, x2)
+
+        #print(loss_lm, ntoken_lm, loss, ntoken)
+        loss = loss_lm * self.alpha_lm + loss * (1 - self.alpha_lm)
+        #print(loss)
+
+        extra = {"ntoken": ntoken, "main_loss": loss, "l1_norm_loss": l1_norm}
+        return loss, (ntoken, extra)
+
+@LOSS_HEADS_REGISTRY.register()
 class ViLMLossHead(LMLossHead):
     def __init__(self, cfg, token_vocab, **kwargs):
         super().__init__(cfg, token_vocab, **kwargs)

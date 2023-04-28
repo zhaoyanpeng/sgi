@@ -310,3 +310,156 @@ class SGIMiniTFMLMDecHead(RouteMiniTFDecHead):
             x = x_logit = x_logit.gather(2, indice).squeeze(2)
 
         return x, x_extra
+
+
+class SGIMiniTFMLMLMDecHead(SGIMiniTFMLMDecHead):
+    def __init__(self, cfg, token_vocab):
+        super().__init__(cfg, token_vocab)
+        self.lm_encoder = None
+        if cfg.num_layer > 0:
+            layer_fn = lambda ilayer: eval(cfg.block)(
+                cfg.m_dim, cfg.num_head, cfg.f_dim, cfg.attn_cls_intra,
+                attn_cls_inter=cfg.attn_cls_inter,
+                ilayer=ilayer,
+                dropout=cfg.t_dropout,
+                qk_scale=cfg.qk_scale,
+                activation=cfg.activation,
+                attn_dropout=cfg.attn_dropout,
+                proj_dropout=cfg.proj_dropout,
+                self_ctx_dropout=cfg.route_self_dropout,
+                memo_ctx_dropout=cfg.route_memo_dropout,
+                num_head_intra=cfg.num_head_intra,
+                num_head_inter=cfg.num_head_inter,
+                q_activation=cfg.q_activation,
+                k_activation=cfg.k_activation,
+                num_pos=cfg.max_dec_len,
+                sign_q_intra=cfg.sign_q_intra,
+                sign_k_intra=cfg.sign_k_intra,
+                sign_q_inter=cfg.sign_q_inter,
+                sign_k_inter=cfg.sign_k_inter,
+                inter_layers=list(cfg.inter_layers),
+            )
+            self.lm_encoder = MiniTF(layer_fn, cfg.num_layer)
+
+    def forward(
+        self,
+        x: Tensor,
+        memory: Tensor=None,
+        memo_attn_mask: Tensor=None,
+        memo_key_padding_mask: Tensor=None,
+        mlm_inputs: Tensor=None,
+        mlm_labels: Tensor=None,
+        inter_attn_mask: Tensor=None,
+        epoch_beta: float=0.,
+        infer: bool=False,
+        **kwargs,
+    ):
+        if memory is None: # may or may not have inter attention
+            memory = memo_attn_mask = memo_key_padding_mask = None
+        if infer and not self.training:
+            return self.inference(
+                x,
+                memory=memory,
+                memo_attn_mask=memo_attn_mask,
+                memo_key_padding_mask=memo_key_padding_mask,
+                mlm_inputs=mlm_inputs,
+                mlm_labels=mlm_labels,
+                inter_attn_mask=inter_attn_mask,
+                **kwargs,
+            )
+        
+        original_x = x
+
+        ##### MLM LOSS 
+
+        i_seqs = mlm_inputs
+        self_key_padding_mask = (i_seqs == self.token_vocab.PAD_IDX)
+
+        if inter_attn_mask is not None: # hard attention provided externally
+            if inter_attn_mask.dim() == 2: # (B, S)
+                memo_key_padding_mask = inter_attn_mask | memo_key_padding_mask
+            elif inter_attn_mask.dim() == 3: # (B, T, S)
+                assert memo_attn_mask is None
+                memo_attn_mask = inter_attn_mask
+
+        x = self._encode_positions(i_seqs)
+
+        if self.encoder is None:
+            pass #return self.predictor(x), mlm_labels, {}
+
+        attn_weights = list()
+        if self.encoder is not None:
+            x, attn_weights = self.encoder(
+                x,
+                memory=memory,
+                self_attn_mask=None,
+                memo_attn_mask=memo_attn_mask,
+                self_key_padding_mask=self_key_padding_mask,
+                memo_key_padding_mask=memo_key_padding_mask,
+                require_attn_weight=True
+            )
+
+        ### special cross attn
+        x, attn_weights_ = self.post_encoder(
+            x,
+            memory=memory,
+            self_attn_mask=None,
+            memo_attn_mask=memo_attn_mask,
+            self_key_padding_mask=self_key_padding_mask,
+            memo_key_padding_mask=memo_key_padding_mask,
+            require_attn_weight=True,
+            split_vl=self.split_vl,
+            epoch_beta=epoch_beta,
+        )
+
+        intra, (inter, logit_prior) = attn_weights_ # final layer
+        attn_weights.append((intra, inter))
+
+        x_old = x
+        x_mlm, _ = self.predict(x, logit_prior)
+
+        ##### LM LOSS 
+        x = original_x 
+        o_seqs = x[:, 1 :]
+        i_seqs = x[:, :-1]
+        length = i_seqs.size(1)
+
+        self_key_padding_mask = (i_seqs == self.token_vocab.PAD_IDX)
+        self_attn_mask = (torch.triu(
+            torch.ones(length, length, dtype=torch.uint8, device=x.device), 
+        diagonal=1) == 1)
+        
+        x = self._encode_positions(i_seqs)
+
+        if self.lm_encoder is not None:
+            x, attn_weights_lm = self.lm_encoder(
+                x, 
+                memory=memory, 
+                self_attn_mask=self_attn_mask.squeeze(0),
+                self_key_padding_mask=self_key_padding_mask,
+                memo_key_padding_mask=memo_key_padding_mask,
+                require_attn_weight=True
+            ) 
+        
+        ### special cross attn
+        x, attn_weights_lm_ = self.post_encoder(
+            x,
+            memory=memory,
+            self_attn_mask=self_attn_mask.squeeze(0),
+            memo_attn_mask=memo_attn_mask,
+            self_key_padding_mask=self_key_padding_mask,
+            memo_key_padding_mask=memo_key_padding_mask,
+            require_attn_weight=True,
+            split_vl=self.split_vl,
+            epoch_beta=epoch_beta,
+        )
+
+        intra, (inter, logit_prior) = attn_weights_lm_ # final layer
+        #attn_weights.append((intra, inter))
+
+        #x_old = x
+        x_lm, _ = self.predict(x, logit_prior)
+        lm_labels = o_seqs.clone()
+        lm_labels[o_seqs == self.token_vocab.PAD_IDX] = -100
+        
+        return x_mlm, mlm_labels, {"attns": attn_weights, "x_lm": x_lm, "lm_labels": lm_labels}

@@ -179,15 +179,36 @@ class ClevrDataLoader(torch.utils.data.Dataset):
                 pass
             return final
 
+        def new_filter_captions(item):
+            captions = item.get(self.input_cap_type, None)
+            captions = [caption for caption in captions if len(caption) > 0]
+
+            relations = list(cfg.relation_words)
+            if cate_type is not None or len(relations) == 0:
+                return captions
+            #print("\n".join([" ".join(x) for x in captions]))
+
+            masks = list()
+            for caption in captions:
+                getitin = False
+                for relation in relations:
+                    if relation in caption:
+                        getitin = True
+                        break
+                masks.append(getitin)
+            full = [captions[i] for i, getitin in enumerate(masks) if getitin]
+            return full
+
         max_len = -1
 
         self.dataset = []
         with open(data_file, "r") as fr:
             for line in fr:
                 item = json.loads(line)
-                full_caps = item.get("full_caps", None)
-                part_caps = item.get("part_caps", None)
-                captions = filter_captions(item["captions"], full_caps, part_caps)
+                #full_caps = item.get("full_caps", None)
+                #part_caps = item.get("part_caps", None)
+                #captions = filter_captions(item["captions"], full_caps, part_caps)
+                captions = new_filter_captions(item)
                 if len(captions) == 0:
                     continue
                 #max_len = max(max_len, max([len(x) for x in captions]))
@@ -382,7 +403,7 @@ def build_clevr_dataset(cfg, train, echo):
 
     order = (
         'f"{size} {shape} {color} {material}"'
-        if "mp" not in cfg.data_name else
+        if "thesis" not in cfg.data_name else
         'f"{size} {color} {material} {shape}"'
     ) # TODO hard-coded for dataset containing object masks and part captions
     # customized vocab
