@@ -15,40 +15,25 @@ seed=1213
 
 echo "GPUs: "$CUDA_VISIBLE_DEVICES "#"$ngpu "PORT: "$port
 
-alias_root="/net/nfs2.mosaic/yann/model/sgi"
+alias_root="$HOME/backup/model/sgi"
 model_root=$alias_root
 
-data_root="/home/s1847450/data/scenedata/cl-bbox/captions/"
-data_root="/net/nfs2.mosaic/yann/data/captions/"
-
-enc_vocab_name="object_label.split.train.70k.topk.dict"
-dec_vocab_name="captions_train.pos.topk.dict"
+data_root="$HOME/backup/data/scene/clevr/"
 
 enc_vocab_name="object_label.split.train.70k.topk.dict"
 dec_vocab_name="captions_train.70k.topk.dict"
 
-data_name="CLEVR_train_captions.toy.json"
-eval_name="CLEVR_train_captions.toy.json"
-
 data_name="CLEVR_train_captions.70k.one_hop.json"
 eval_name="CLEVR_val_captions.one_hop.json"
 
+data_name="CLEVR_train_captions.toy.json"
+eval_name="CLEVR_train_captions.toy.json"
+
+#
 # bash bash/run_clevr_base.sh default 0
 
 # train: clevr 
-model_name="sgi.obj.test.sel."$data_name
-model_name="sgi.obj.epoch.50.rel."$data_name
-model_name="sgi.rel.200.both."
-model_name="sgi.rel.100.1e5"
-model_name="sgi.test.4rel.32h"
-model_name="sgi.test.caption.8h.pcat"
-model_name="sgi.test.2rel.lf.8h.padd"
-model_name="sgi.test.2rel.lr.8h.pcat"
-model_name="sgi.test.2rel.lf.8h.d1.pcat"
-model_name="sgi.test.2rel.lf.8h.d1.rnd.padd"
-model_name="sgi.test.2rel.lr.8h.d1.rnd.pcat"
-model_name="sgi.test.2rel.lr.8h.d1.rnd.orel.pcat"
-model_name="sgi.test.2rel.lf.8h.d1.rnd.orel.pcat"
+model_name="sgi.clevr.rel.test"
 mtask="alias_name=$model_name
 verbose=True optimizer.warmup=False optimizer.weight_decay=1e-6
 data.enc_vocab_name=$enc_vocab_name data.dec_vocab_name=$dec_vocab_name
@@ -87,7 +72,8 @@ extra="$mtask "
  
 #export CUDA_LAUNCH_BLOCKING=1
 #nohup python -m torch.utils.bottleneck train.py \
-nohup python train.py port=$port num_gpus=$ngpu eval=False mode=$mode num_proc=$num_proc seed=$seed \
+#nohup 
+python train.py port=$port num_gpus=$ngpu eval=False mode=$mode num_proc=$num_proc seed=$seed \
     alias_root=$alias_root data.data_name=$data_name data.data_root=$data_root \
     +model/encoder=mini_tf \
     +model/decoder=mini_tf \
@@ -95,4 +81,5 @@ nohup python train.py port=$port num_gpus=$ngpu eval=False mode=$mode num_proc=$
     +model/loss=ce_lm \
     +optimizer=default \
     +data=clevr \
-    +running=$run_type $extra > ./log/$model_name 2>&1 &
+    +running=$run_type $extra 
+#> ./log/$model_name 2>&1 &

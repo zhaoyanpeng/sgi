@@ -15,31 +15,26 @@ seed=1213
 
 echo "GPUs: "$CUDA_VISIBLE_DEVICES "#"$ngpu "PORT: "$port
 
-alias_root="/net/nfs2.mosaic/yann/model/sgi"
+alias_root="$HOME/backup/model/sgi"
 model_root=$alias_root
 
-data_root="/home/s1847450/data/scenedata/cl-bbox/captions/"
-data_root="/net/nfs2.mosaic/yann/data/captions/"
-
-enc_vocab_name="object_label.split.train.70k.topk.dict"
-dec_vocab_name="captions_train.pos.topk.dict"
+data_root="$HOME/backup/data/scene/clevr/"
 
 enc_vocab_name="object_label.split.train.70k.topk.dict"
 dec_vocab_name="captions_train.70k.topk.dict"
+dec_vocab_name="captions_train.2.0.topk.dict"
 
 data_name="CLEVR_train_captions.70k.one_hop.json"
 eval_name="CLEVR_val_captions.one_hop.json"
 
-dec_vocab_name="captions_train.2.0.topk.dict"
-
-
-data_name="CLEVR_train_captions.pos2.0.toy.json"
-eval_name="CLEVR_train_captions.pos2.0.toy.json"
-
 data_name="CLEVR_train_captions.2.0.one_hop.json"
 eval_name="CLEVR_val_captions.2.0.one_hop.json"
 
-# bash bash/run_clevr_base.sh default 0
+data_name="CLEVR_train_captions.2.0.thesis.toy.one_hop.json"
+eval_name="CLEVR_train_captions.2.0.thesis.toy.one_hop.json"
+
+#
+# bash bash/run_clevr_eval.sh default 0
 
 alias_name=sgi_test
 model_file=00000643.pth
@@ -47,8 +42,7 @@ model_file=00000525.pth
 
 
 # train: clevr 
-model_name="sgi.reason.4rel.learned.wd8.p15.d4-2.mini.e1.11.m1.shark"
-model_name="sgi.reason.learned.wd8.p15.d4-2.mini.e1.11.m1.shark"
+model_name="sgi.clevr.base.eval"
 mtask="
 verbose=False alias_name=$alias_name model_root=$model_root model_name=$model_name model_file=$model_file 
 data.enc_vocab_name=$enc_vocab_name data.dec_vocab_name=$dec_vocab_name

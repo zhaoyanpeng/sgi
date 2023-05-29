@@ -15,19 +15,23 @@ seed=1213
 
 echo "GPUs: "$CUDA_VISIBLE_DEVICES "#"$ngpu "PORT: "$port
 
-alias_root="/net/nfs2.mosaic/yann/model/sgi"
+alias_root="$HOME/backup/model/sgi"
 model_root=$alias_root
 
 enc_vocab_name=notafile
 dec_vocab_name="toy.256.dict"
 
-data_root="/net/nfs2.mosaic/yann/data/copy/"
+data_root="$HOME/backup/data/scene/copy/"
 data_name="train.10.256.5.9.50.json"
 data_name="train.10.256x.5.9.50.json"
 data_name="train.100.256.5.9.50.json"
 eval_name="test.10.256.5.9.25.json"
 eval_name="test.10.256x.5.9.25.json"
 eval_name="test.100.256.5.9.25.json"
+
+
+# Toy COPY experiment w/o modeling relative relations. 
+# bash bash/run_copy_base.sh default 0 
 
 
 model_name="toy.copy."$data_name

@@ -62,7 +62,7 @@ class MiniTFLM(nn.Module):
             self.model_type = 'Transformer'
             self.pos_encoder = PositionalEncoder(cfg.m_dim, cfg.p_dropout)
             self.ln0 = nn.LayerNorm(cfg.m_dim)
-            layer_fn = lambda : MiniTFBlock(
+            layer_fn = lambda ilayer: MiniTFBlock(
                 cfg.m_dim, cfg.num_head, cfg.f_dim, cfg.attn_cls_intra, 
                 attn_cls_inter=cfg.attn_cls_inter, 
                 dropout=cfg.t_dropout, 

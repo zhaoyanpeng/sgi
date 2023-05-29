@@ -15,7 +15,7 @@ seed=1213
 
 echo "GPUs: "$CUDA_VISIBLE_DEVICES "#"$ngpu "PORT: "$port
 
-alias_root="/net/nfs2.mosaic/yann/model/sgi"
+alias_root="$HOME/backup/model/sgi"
 model_root=$alias_root
 
 data_root=null
@@ -24,7 +24,8 @@ data_name=null
 enc_vocab_name=null
 dec_vocab_name=null
 
-# bash bash/run_test.sh default 0 
+# Test the implementation of Transformer
+# bash bash/run_test_tf.sh default 0 
 
 model_name="tf.test"
 mtask="alias_name=$model_name
