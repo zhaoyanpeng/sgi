@@ -81,6 +81,15 @@ class SpecialTFBlock(MiniTFBlock):
         self.self_ctx_dp = nn.Dropout(self_ctx_dropout)
         self.memo_ctx_dp = nn.Dropout(memo_ctx_dropout)
 
+        D = self.intra_attn.D
+
+        self.self_ctx_ln = nn.LayerNorm(D)
+        self.memo_ctx_ln = nn.LayerNorm(D)
+
+        self.beta_slice = 8
+        self.beta_alpha = torch.tensor([2.])
+        self.beta_sampler = torch.distributions.beta.Beta(self.beta_alpha, self.beta_alpha)
+
     def forward(
         self, q: Tensor,
         kv: Tensor = None,
@@ -153,6 +162,35 @@ class SpecialTFBlock(MiniTFBlock):
                 #x = self.inter_attn_ln(F.dropout(residual, p=0.15, training=self.training) + x)
                 ## dropout -> ab
                 x = self.inter_attn_ln(self.self_ctx_dp(residual) + self.memo_ctx_dp(x))
+
+                ## lndp
+                #x = (
+                #    self.self_ctx_dp(self.self_ctx_ln(residual)) +
+                #    self.memo_ctx_dp(self.memo_ctx_ln(x))
+                #)
+
+                ## lndpln
+                #x = self.inter_attn_ln(
+                #    self.self_ctx_dp(self.self_ctx_ln(residual)) +
+                #    self.memo_ctx_dp(self.memo_ctx_ln(x))
+                #)
+
+                #shape = list(residual.shape)
+                #shape[-1] = shape[-1] // self.beta_slice
+                #beta = self.beta_sampler.sample(shape).squeeze(-1)
+                #beta = beta.to(residual).repeat_interleave(self.beta_slice, -1)
+
+                ## lndp - beta
+                #x = (
+                #    (1 - beta) * self.memo_ctx_ln(x) +
+                #    beta * self.self_ctx_ln(residual)
+                #)
+
+                ## lndpln - beta
+                #x = self.inter_attn_ln(
+                #    (1 - beta) * self.memo_ctx_ln(x) +
+                #    beta * self.self_ctx_ln(residual)
+                #)
             else:
                 v = self.inter_attn_ln(self.memo_ctx_dp(x))
                 l = self.inter_attn_ln(self.self_ctx_dp(residual))
