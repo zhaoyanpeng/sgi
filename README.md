@@ -1,6 +1,6 @@
 # VG-MLM: Visually Grounded Masked Language Model
 
-Code for the paper *[Unsupervised Scene Graph Induction from Language Supervision](./paper.pdf)* by [Yanpeng Zhao]() and [Ivan Titov](http://ivan-titov.org).
+Code for the paper *[Unsupervised Scene Graph Induction from Natural Language Supervision](./paper.pdf)* by [Yanpeng Zhao]() and [Ivan Titov](http://ivan-titov.org).
 
 <p align="center"><img src="https://drive.google.com/uc?id=1DdPMr7jUwS5TLgjd--WqMR75ceGHCCue" alt="VG-MLM is trained via multimodal masked language modeling" width=75%/></p>
 
@@ -51,7 +51,7 @@ pip install -r requirements.txt
 ```bibtex
 @misc{VC-MLM,
   author = {Yanpeng Zhao and Ivan Titov},
-  title = {Unsupervised Scene Graph Induction from Language Supervision},
+  title = {Unsupervised Scene Graph Induction from Natural Language Supervision},
   year = {2023},
   publisher = {GitHub},
   journal = {GitHub Repository},
